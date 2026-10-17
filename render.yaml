@@ -1,0 +1,22 @@
+# Render Blueprint - triển khai backend SyncTune (FastAPI + yt-dlp)
+# Cách dùng: đẩy repo lên GitHub, vào Render -> New -> Blueprint -> chọn repo này.
+services:
+  - type: web
+    name: synctune-api
+    runtime: python
+    plan: free
+    rootDir: api
+    buildCommand: pip install -r requirements.txt && pip install -U yt-dlp
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /api/health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: CORS_ORIGINS
+        sync: false
+      - key: CACHE_TTL
+        value: "1800"
+      - key: YTDLP_COOKIES_FROM_BROWSER
+        sync: false
+      - key: YTDLP_COOKIEFILE
+        sync: false
