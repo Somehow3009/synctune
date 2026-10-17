@@ -13,5 +13,6 @@ __pycache__/
 .DS_Store
 Thumbs.db
 *.log
+*.tsbuildinfo
 .vscode/
 .idea/
