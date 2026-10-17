@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from .config import settings
-from .ytdlp_service import ExtractionError, resolve, search
+from .ytdlp_service import ExtractionError, cookies_configured, resolve, search
 
 router = APIRouter()
 
@@ -51,7 +51,7 @@ async def _resolve_or_502(url: str) -> dict:
 
 @router.get("/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "cookies": cookies_configured()}
 
 
 @router.get("/search")

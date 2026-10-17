@@ -20,6 +20,7 @@ class Settings:
         self.cache_ttl: int = int(os.getenv("CACHE_TTL", "1800"))
         self.cookies_from_browser: str = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "").strip()
         self.cookiefile: str = os.getenv("YTDLP_COOKIEFILE", "").strip()
+        self.cookies_text: str = os.getenv("YTDLP_COOKIES", "")
         self.proxy_allowed_hosts: list[str] = _split_csv(
             os.getenv("PROXY_ALLOWED_HOSTS", DEFAULT_PROXY_HOSTS)
         )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 import threading
 import time
 from datetime import datetime, timezone
@@ -12,6 +14,48 @@ from .config import settings
 
 class ExtractionError(Exception):
     pass
+
+
+_cookie_file_path: str | None = None
+_cookie_lock = threading.Lock()
+
+
+def _cookie_file() -> str | None:
+    """Return a path to a cookies.txt file, or None.
+
+    Supports:
+      - YTDLP_COOKIEFILE: path to an existing file (e.g. a Render Secret File)
+      - YTDLP_COOKIES: the raw Netscape cookie text (written to a temp file)
+    """
+    global _cookie_file_path
+    if _cookie_file_path:
+        return _cookie_file_path
+    with _cookie_lock:
+        if _cookie_file_path:
+            return _cookie_file_path
+        if settings.cookiefile and os.path.exists(settings.cookiefile):
+            _cookie_file_path = settings.cookiefile
+            return _cookie_file_path
+        text = settings.cookies_text.strip()
+        if text:
+            text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+            if not text.endswith("\n"):
+                text += "\n"
+            path = os.path.join(tempfile.gettempdir(), "synctune_cookies.txt")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(text)
+            _cookie_file_path = path
+            return _cookie_file_path
+    return None
+
+
+def cookies_configured() -> bool:
+    if settings.cookies_from_browser:
+        return True
+    try:
+        return _cookie_file() is not None
+    except OSError:
+        return False
 
 
 class TTLCache:
@@ -70,8 +114,10 @@ def base_opts() -> dict[str, Any]:
         parts = settings.cookies_from_browser.split(":")
         padded = (parts + [None, None, None, None])[:4]
         opts["cookiesfrombrowser"] = tuple(padded)
-    if settings.cookiefile:
-        opts["cookiefile"] = settings.cookiefile
+    else:
+        cookie_file = _cookie_file()
+        if cookie_file:
+            opts["cookiefile"] = cookie_file
     return opts
 
 

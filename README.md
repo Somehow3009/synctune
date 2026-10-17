@@ -66,12 +66,15 @@ Biến môi trường (`api/.env`):
 | `CORS_ORIGINS` | Danh sách origin được phép, ví dụ `http://localhost:3000` (mặc định `*`) |
 | `CACHE_TTL` | Giây cache kết quả trích xuất luồng (mặc định `1800`) |
 | `YTDLP_COOKIES_FROM_BROWSER` | Tuỳ chọn (dev), ví dụ `chrome` — dùng khi YouTube chặn bot |
-| `YTDLP_COOKIEFILE` | Tuỳ chọn (deploy), đường dẫn tới `cookies.txt` xuất từ trình duyệt |
+| `YTDLP_COOKIEFILE` | Tuỳ chọn (deploy), đường dẫn tới `cookies.txt` (vd Render Secret File `/etc/secrets/cookies.txt`) |
+| `YTDLP_COOKIES` | Tuỳ chọn (deploy), nội dung `cookies.txt` dán trực tiếp (sẽ ghi ra file tạm) |
 | `PROXY_ALLOWED_HOSTS` | Danh sách host CDN được phép qua proxy stream |
 
 > **YouTube/TikTok thỉnh thoảng yêu cầu xác minh.** Gặp lỗi `resolve` 502 thì cập nhật yt-dlp
 > (`pip install -U yt-dlp`) hoặc đặt `YTDLP_COOKIES_FROM_BROWSER=chrome` (máy local). Trên cloud
-> (Render…) không có trình duyệt nên dùng **`YTDLP_COOKIEFILE`** trỏ tới file `cookies.txt`.
+> (Render…) IP datacenter thường bị YouTube chặn nên **bắt buộc cần cookie**: dùng
+> **`YTDLP_COOKIEFILE`** (Secret File) hoặc **`YTDLP_COOKIES`** (dán nội dung file).
+> Kiểm tra tại `GET /api/health` → `"cookies": true`.
 
 ## 2) Chạy Web (PWA)
 
