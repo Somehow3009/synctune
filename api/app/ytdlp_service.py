@@ -381,6 +381,14 @@ def cookie_report() -> dict[str, Any]:
     report["fs_bgutil_server"] = os.path.isfile(
         os.path.join(_API_DIR, "bgutil", "server", "src", "generate_once.ts")
     )
+    for key, path in (
+        ("fs_bgutil_listing", os.path.join(_API_DIR, "bgutil")),
+        ("fs_bgutil_server_listing", os.path.join(_API_DIR, "bgutil", "server")),
+    ):
+        try:
+            report[key] = sorted(os.listdir(path))[:40]
+        except OSError:
+            report[key] = []
     return report
 
 
