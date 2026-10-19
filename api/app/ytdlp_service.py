@@ -379,6 +379,13 @@ def cookie_report() -> dict[str, Any]:
     report["remote_components_env"] = list(settings.remote_components)
     report["bgutil_plugin"] = _bgutil_plugin_available()
     report["bgutil_server_home"] = _bgutil_server_home()
+    try:
+        import httpx
+
+        with httpx.Client(timeout=15) as client:
+            report["outbound_ip"] = client.get("https://api.ipify.org").text.strip()
+    except Exception:  # noqa: BLE001
+        report["outbound_ip"] = None
     report["fs_api_dir"] = _API_DIR
     try:
         report["fs_listing"] = sorted(os.listdir(_API_DIR))[:40]

@@ -121,7 +121,13 @@ async def stream_endpoint(request: Request, src: str = Query(..., min_length=1))
     if not _host_allowed(src):
         raise HTTPException(status_code=400, detail="Host not allowed for proxying")
 
-    upstream_headers = {"User-Agent": UPSTREAM_USER_AGENT}
+    upstream_headers = {
+        "User-Agent": UPSTREAM_USER_AGENT,
+        "Accept": "*/*",
+        "Accept-Language": "en-us,en;q=0.5",
+        "Origin": "https://www.youtube.com",
+        "Referer": "https://www.youtube.com/",
+    }
     range_header = request.headers.get("range")
     if range_header:
         upstream_headers["Range"] = range_header
