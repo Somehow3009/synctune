@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sysconfig
 import tempfile
 import threading
 import time
@@ -135,11 +136,14 @@ _js_runtime_cache: dict[str, Any] | None = None
 
 
 def _resolve_deno_path() -> str | None:
+    scripts_dir = sysconfig.get_path("scripts") or ""
     candidates = [
         settings.js_runtime_path,
         "/usr/local/bin/deno",
         os.path.join(_API_DIR, "bin", "deno"),
         os.path.join(_API_DIR, ".deno", "bin", "deno"),
+        os.path.join(os.path.dirname(_API_DIR), ".venv", "bin", "deno"),
+        os.path.join(scripts_dir, "deno") if scripts_dir else "",
     ]
     for candidate in candidates:
         if not candidate:
