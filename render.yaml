@@ -9,8 +9,10 @@ services:
     buildCommand: >-
       pip install -r requirements.txt &&
       pip install -U yt-dlp &&
-      git clone --depth 1 --single-branch --branch 2.0.2
+      rm -rf bgutil &&
+      git clone --depth 1 --branch 2.0.2
       https://github.com/Brainicism/bgutil-ytdlp-pot-provider.git bgutil &&
+      ls bgutil/server &&
       cd bgutil/server &&
       "$(python -c 'import sysconfig;print(sysconfig.get_path("scripts"))')/deno"
       install --allow-scripts=npm:canvas || echo "BGUTIL_SETUP_FAILED"
