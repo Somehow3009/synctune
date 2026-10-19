@@ -3,6 +3,7 @@ from __future__ import annotations
 from urllib.parse import urlparse
 
 import httpx
+import yt_dlp
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
@@ -56,19 +57,18 @@ async def _resolve_or_502(url: str) -> dict:
 
 def _dltest(url: str) -> dict:
     try:
-        from yt_dlp.utils import Request, urlopen
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": f"import failed: {exc}"}
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Accept": "*/*",
-        "Accept-Language": "en-us,en;q=0.5",
-    }
-    cookie = _cookie_header()
-    if cookie:
-        headers["Cookie"] = cookie
-    try:
-        response = urlopen(Request(url, headers=headers))
+        from yt_dlp.networking.common import Request
+
+        ydl = yt_dlp.YoutubeDL({"quiet": True})
+        headers = {
+            "User-Agent": USER_AGENT,
+            "Accept": "*/*",
+            "Accept-Language": "en-us,en;q=0.5",
+        }
+        cookie = _cookie_header()
+        if cookie:
+            headers["Cookie"] = cookie
+        response = ydl.urlopen(Request(url, headers=headers))
         data = response.read(2048)
         return {
             "ok": True,
