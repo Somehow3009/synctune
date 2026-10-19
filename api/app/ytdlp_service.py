@@ -372,6 +372,15 @@ def cookie_report() -> dict[str, Any]:
     report["remote_components_env"] = list(settings.remote_components)
     report["bgutil_plugin"] = _bgutil_plugin_available()
     report["bgutil_server_home"] = _bgutil_server_home()
+    report["fs_api_dir"] = _API_DIR
+    try:
+        report["fs_listing"] = sorted(os.listdir(_API_DIR))[:40]
+    except OSError:
+        report["fs_listing"] = []
+    report["fs_bgutil_clone"] = os.path.isdir(os.path.join(_API_DIR, "bgutil"))
+    report["fs_bgutil_server"] = os.path.isfile(
+        os.path.join(_API_DIR, "bgutil", "server", "src", "generate_once.ts")
+    )
     return report
 
 
