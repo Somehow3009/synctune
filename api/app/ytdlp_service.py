@@ -18,14 +18,19 @@ class ExtractionError(Exception):
 
 _cookie_file_path: str | None = None
 _cookie_lock = threading.Lock()
+_TEMP_COOKIE_PATH = os.path.join(tempfile.gettempdir(), "synctune_cookies.txt")
 
 
 def _cookie_file() -> str | None:
-    """Return a path to a cookies.txt file, or None.
+    """Return a path to a writable cookies.txt file, or None.
 
     Supports:
       - YTDLP_COOKIEFILE: path to an existing file (e.g. a Render Secret File)
-      - YTDLP_COOKIES: the raw Netscape cookie text (written to a temp file)
+      - YTDLP_COOKIES: the raw Netscape cookie text
+
+    The cookies are always copied into a writable temp file because yt-dlp
+    saves the cookie jar back to ``cookiefile`` (which is read-only for
+    mounted secret files).
     """
     global _cookie_file_path
     if _cookie_file_path:
@@ -33,20 +38,22 @@ def _cookie_file() -> str | None:
     with _cookie_lock:
         if _cookie_file_path:
             return _cookie_file_path
+        text = ""
         if settings.cookiefile and os.path.exists(settings.cookiefile):
-            _cookie_file_path = settings.cookiefile
-            return _cookie_file_path
-        text = settings.cookies_text.strip()
-        if text:
-            text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
-            if not text.endswith("\n"):
-                text += "\n"
-            path = os.path.join(tempfile.gettempdir(), "synctune_cookies.txt")
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(text)
-            _cookie_file_path = path
-            return _cookie_file_path
-    return None
+            with open(settings.cookiefile, "r", encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        if not text.strip():
+            text = settings.cookies_text
+        text = text.strip()
+        if not text:
+            return None
+        text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+        if not text.endswith("\n"):
+            text += "\n"
+        with open(_TEMP_COOKIE_PATH, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        _cookie_file_path = _TEMP_COOKIE_PATH
+        return _cookie_file_path
 
 
 def cookies_configured() -> bool:
