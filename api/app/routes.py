@@ -54,6 +54,32 @@ async def _resolve_or_502(url: str) -> dict:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
+def _dltest(url: str) -> dict:
+    try:
+        from yt_dlp.utils import Request, urlopen
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": f"import failed: {exc}"}
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "*/*",
+        "Accept-Language": "en-us,en;q=0.5",
+    }
+    cookie = _cookie_header()
+    if cookie:
+        headers["Cookie"] = cookie
+    try:
+        response = urlopen(Request(url, headers=headers))
+        data = response.read(2048)
+        return {
+            "ok": True,
+            "status": getattr(response, "status", None),
+            "bytes": len(data),
+            "content_type": response.headers.get("Content-Type"),
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "error": str(exc)[:400]}
+
+
 @router.get("/health")
 async def health() -> dict:
     return {"status": "ok", "cookies": cookies_configured()}
@@ -80,6 +106,11 @@ async def debug_endpoint(
         probe, url, client_list, verbose, extra, components
     )
     return {"cookies": report, "probe": attempts}
+
+
+@router.get("/dltest")
+async def dltest_endpoint(url: str = Query(..., min_length=1)) -> dict:
+    return await run_in_threadpool(_dltest, url)
 
 
 @router.get("/search")
