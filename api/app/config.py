@@ -29,6 +29,8 @@ class Settings:
             os.getenv("YTDLP_REMOTE_COMPONENTS", "")
         )
         self.extractor_args: str = os.getenv("YTDLP_EXTRACTOR_ARGS", "").strip()
+        self.pot_server_home: str = os.getenv("YTDLP_POT_SERVER_HOME", "").strip()
+        self.fetch_pot: str = os.getenv("YTDLP_FETCH_POT", "").strip()
         self.debug_token: str = os.getenv("DEBUG_TOKEN", "").strip()
         self.proxy_allowed_hosts: list[str] = _split_csv(
             os.getenv("PROXY_ALLOWED_HOSTS", DEFAULT_PROXY_HOSTS)

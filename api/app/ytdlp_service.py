@@ -235,6 +235,36 @@ def merge_extractor_args(*sources: dict[str, dict[str, list[str]]]) -> dict[str,
     return merged
 
 
+def _bgutil_plugin_available() -> bool:
+    try:
+        import importlib.util
+
+        return (
+            importlib.util.find_spec(
+                "yt_dlp_plugins.extractor.getpot_bgutil_script"
+            )
+            is not None
+        )
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _bgutil_server_home() -> str | None:
+    candidates = [
+        settings.pot_server_home,
+        os.path.join(_API_DIR, "bgutil", "server"),
+        os.path.join(
+            os.path.expanduser("~"), "bgutil-ytdlp-pot-provider", "server"
+        ),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if os.path.isfile(os.path.join(candidate, "src", "generate_once.ts")):
+            return candidate
+    return None
+
+
 def base_opts() -> dict[str, Any]:
     opts: dict[str, Any] = {
         "quiet": True,
@@ -256,6 +286,15 @@ def base_opts() -> dict[str, Any]:
         extractor_args.setdefault("youtube", {})["player_client"] = list(
             settings.player_clients
         )
+    if _bgutil_plugin_available():
+        home = _bgutil_server_home()
+        if home:
+            extractor_args.setdefault("youtubepot-bgutilscript", {})[
+                "server_home"
+            ] = [home]
+            extractor_args.setdefault("youtube", {})["fetch_pot"] = [
+                settings.fetch_pot or "always"
+            ]
     if extractor_args:
         opts["extractor_args"] = extractor_args
     runtimes = js_runtimes()
@@ -331,6 +370,8 @@ def cookie_report() -> dict[str, Any]:
     report["player_clients_env"] = list(settings.player_clients)
     report["js_runtime"] = _resolve_deno_path()
     report["remote_components_env"] = list(settings.remote_components)
+    report["bgutil_plugin"] = _bgutil_plugin_available()
+    report["bgutil_server_home"] = _bgutil_server_home()
     return report
 
 
