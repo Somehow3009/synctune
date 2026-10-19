@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import threading
@@ -14,6 +15,72 @@ from .config import settings
 
 class ExtractionError(Exception):
     pass
+
+
+def _json_cookies_to_netscape(text: str) -> str | None:
+    try:
+        data = json.loads(text)
+    except Exception:  # noqa: BLE001
+        return None
+    if isinstance(data, dict):
+        data = data.get("cookies")
+    if not isinstance(data, list):
+        return None
+    rows = [
+        "# Netscape HTTP Cookie File",
+        "# Converted from a JSON cookie export by SyncTune",
+    ]
+    for cookie in data:
+        if not isinstance(cookie, dict):
+            continue
+        name = cookie.get("name") or ""
+        domain = cookie.get("domain") or ""
+        if not name or not domain:
+            continue
+        value = cookie.get("value")
+        value = "" if value is None else str(value)
+        path = cookie.get("path") or "/"
+        secure = "TRUE" if cookie.get("secure") else "FALSE"
+        include = "TRUE" if domain.startswith(".") else "FALSE"
+        expiry = int(cookie.get("expirationDate") or cookie.get("expires") or 0)
+        rows.append("\t".join([domain, include, path, secure, str(expiry), name, value]))
+    if len(rows) <= 2:
+        return None
+    return "\n".join(rows) + "\n"
+
+
+def _normalize_cookie_text(text: str) -> str:
+    """Make third-party cookie exports usable by yt-dlp.
+
+    Handles: literal ``\\n``/``\\t`` escapes, CRLF, JSON exports and lines whose
+    tab separators were replaced by spaces (e.g. pasted into a web form).
+    """
+    text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+    text = text.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return ""
+    if text[0] in "[{":
+        converted = _json_cookies_to_netscape(text)
+        if converted:
+            text = converted
+    lines: list[str] = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "\t" in line:
+            lines.append(stripped)
+            continue
+        tokens = stripped.split()
+        if len(tokens) < 6:
+            lines.append(stripped)
+            continue
+        if len(tokens) == 7:
+            parts = tokens
+        elif len(tokens) > 7:
+            parts = tokens[:6] + [" ".join(tokens[6:])]
+        else:
+            parts = tokens + [""]
+        lines.append("\t".join(parts))
+    return "\n".join(lines).strip("\n") + "\n"
 
 
 _cookie_file_path: str | None = None
@@ -44,12 +111,9 @@ def _cookie_file() -> str | None:
                 text = handle.read()
         if not text.strip():
             text = settings.cookies_text
-        text = text.strip()
+        text = _normalize_cookie_text(text)
         if not text:
             return None
-        text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
-        if not text.endswith("\n"):
-            text += "\n"
         with open(_TEMP_COOKIE_PATH, "w", encoding="utf-8") as handle:
             handle.write(text)
         _cookie_file_path = _TEMP_COOKIE_PATH
