@@ -71,13 +71,17 @@ async def debug_endpoint(
     ),
     verbose: bool = Query(False),
     extractor_args: str = Query(""),
+    remote_components: str = Query(""),
 ) -> dict:
     if settings.debug_token and token != settings.debug_token:
         raise HTTPException(status_code=404, detail="Not found")
     report = await run_in_threadpool(cookie_report)
     client_list = [c.strip() for c in clients.split(",") if c.strip()]
     extra = parse_extractor_args(extractor_args)
-    attempts = await run_in_threadpool(probe, url, client_list, verbose, extra)
+    components = [c.strip() for c in remote_components.split(",") if c.strip()]
+    attempts = await run_in_threadpool(
+        probe, url, client_list, verbose, extra, components
+    )
     return {"cookies": report, "probe": attempts}
 
 

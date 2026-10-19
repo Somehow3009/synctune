@@ -422,10 +422,13 @@ def probe(
     clients: list[str],
     verbose: bool = False,
     extra_args: dict[str, dict[str, list[str]]] | None = None,
+    remote_components: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for client in clients:
         opts = base_opts()
+        if remote_components:
+            opts["remote_components"] = list(remote_components)
         override: dict[str, dict[str, list[str]]] = {}
         if client != "default":
             override = {"youtube": {"player_client": [client]}}
