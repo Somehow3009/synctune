@@ -12,6 +12,7 @@ from .ytdlp_service import (
     ExtractionError,
     cookie_report,
     cookies_configured,
+    parse_extractor_args,
     probe,
     resolve,
     search,
@@ -69,12 +70,14 @@ async def debug_endpoint(
         "default,web,web_safari,mweb,tv,android_vr,visionos,ios,web_embedded,tv_simply"
     ),
     verbose: bool = Query(False),
+    extractor_args: str = Query(""),
 ) -> dict:
     if settings.debug_token and token != settings.debug_token:
         raise HTTPException(status_code=404, detail="Not found")
     report = await run_in_threadpool(cookie_report)
     client_list = [c.strip() for c in clients.split(",") if c.strip()]
-    attempts = await run_in_threadpool(probe, url, client_list, verbose)
+    extra = parse_extractor_args(extractor_args)
+    attempts = await run_in_threadpool(probe, url, client_list, verbose, extra)
     return {"cookies": report, "probe": attempts}
 
 

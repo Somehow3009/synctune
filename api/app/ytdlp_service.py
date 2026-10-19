@@ -206,6 +206,35 @@ _VIDEO_MIME = {
 }
 
 
+def parse_extractor_args(raw: str) -> dict[str, dict[str, list[str]]]:
+    """Parse ``youtube:key=value;key2=value2`` into yt-dlp extractor_args."""
+    result: dict[str, dict[str, list[str]]] = {}
+    current = "youtube"
+    for token in (raw or "").split(";"):
+        token = token.strip()
+        if not token:
+            continue
+        if ":" in token:
+            ie, _, rest = token.partition(":")
+            current = ie.strip().lower() or current
+            token = rest.strip()
+        if not token or "=" not in token:
+            continue
+        key, _, value = token.partition("=")
+        result.setdefault(current, {}).setdefault(key.strip(), []).append(
+            value.strip()
+        )
+    return result
+
+
+def merge_extractor_args(*sources: dict[str, dict[str, list[str]]]) -> dict[str, dict[str, list[str]]]:
+    merged: dict[str, dict[str, list[str]]] = {}
+    for source in sources:
+        for ie, values in (source or {}).items():
+            merged.setdefault(ie, {}).update(values)
+    return merged
+
+
 def base_opts() -> dict[str, Any]:
     opts: dict[str, Any] = {
         "quiet": True,
@@ -222,10 +251,13 @@ def base_opts() -> dict[str, Any]:
         cookie_file = _cookie_file()
         if cookie_file:
             opts["cookiefile"] = cookie_file
+    extractor_args = parse_extractor_args(settings.extractor_args)
     if settings.player_clients:
-        opts["extractor_args"] = {
-            "youtube": {"player_client": list(settings.player_clients)}
-        }
+        extractor_args.setdefault("youtube", {})["player_client"] = list(
+            settings.player_clients
+        )
+    if extractor_args:
+        opts["extractor_args"] = extractor_args
     runtimes = js_runtimes()
     if runtimes:
         opts["js_runtimes"] = runtimes
@@ -319,12 +351,24 @@ class LogCapture:
         self.lines.append(f"ERROR: {message}")
 
 
-def probe(url: str, clients: list[str], verbose: bool = False) -> list[dict[str, Any]]:
+def probe(
+    url: str,
+    clients: list[str],
+    verbose: bool = False,
+    extra_args: dict[str, dict[str, list[str]]] | None = None,
+) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for client in clients:
         opts = base_opts()
+        override: dict[str, dict[str, list[str]]] = {}
         if client != "default":
-            opts["extractor_args"] = {"youtube": {"player_client": [client]}}
+            override = {"youtube": {"player_client": [client]}}
+        if extra_args:
+            override = merge_extractor_args(override, extra_args)
+        if override:
+            opts["extractor_args"] = merge_extractor_args(
+                opts.get("extractor_args", {}), override
+            )
         capture = LogCapture() if verbose else None
         if capture is not None:
             opts["verbose"] = True
