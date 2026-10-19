@@ -27,6 +27,27 @@ export function detectSource(url: string): Source {
   return "other";
 }
 
+export function youtubeVideoId(url: string): string | null {
+  try {
+    const u = new URL(url.trim());
+    const host = u.hostname.replace(/^www\./, "").replace(/^m\./, "").replace(/^music\./, "");
+    if (host === "youtu.be") {
+      const id = u.pathname.split("/").filter(Boolean)[0];
+      return id || null;
+    }
+    if (host === "youtube.com" || host === "youtube-nocookie.com") {
+      const v = u.searchParams.get("v");
+      if (v) return v;
+      const match = u.pathname.match(/\/(?:embed|shorts|live|v)\/([A-Za-z0-9_-]{6,})/);
+      if (match) return match[1];
+    }
+  } catch {
+    /* fall through to the regex below */
+  }
+  const match = url.match(/(?:v=|youtu\.be\/|embed\/|shorts\/|live\/)([A-Za-z0-9_-]{6,})/);
+  return match ? match[1] : null;
+}
+
 export function isSupportedUrl(url: string): boolean {
   try {
     const u = new URL(url.trim());

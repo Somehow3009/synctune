@@ -2,11 +2,20 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { resolveStream } from "@/lib/api";
-import { proxyStreamUrl, shuffleArray } from "@/lib/utils";
+import { proxyStreamUrl, shuffleArray, youtubeVideoId } from "@/lib/utils";
+import type { YouTubePlayerHandle } from "@/components/YouTubePlayer";
 import type { ResolvedStream, RepeatMode, StreamFormat, Track } from "@/lib/types";
 
 interface PlayerContextValue {
   mediaRef: React.RefObject<HTMLVideoElement>;
+  embedRef: React.RefObject<YouTubePlayerHandle>;
+  isEmbed: boolean;
+  embedVideoId: string | null;
+  embedStart: number;
+  onEmbedReady(): void;
+  onEmbedState(state: number): void;
+  onEmbedProgress(time: number, duration: number): void;
+  onEmbedError(message: string): void;
   current: Track | null;
   resolved: ResolvedStream | null;
   queue: Track[];
@@ -70,11 +79,14 @@ function loadHistory(): Track[] {
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const mediaRef = useRef<HTMLVideoElement>(null);
+  const embedRef = useRef<YouTubePlayerHandle>(null);
   const pendingPlayRef = useRef(false);
   const requestRef = useRef(0);
 
   const [current, setCurrent] = useState<Track | null>(null);
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
+  const [embedVideoId, setEmbedVideoId] = useState<string | null>(null);
+  const [embedStart, setEmbedStart] = useState(0);
   const [queue, setQueue] = useState<Track[]>([]);
   const [index, setIndex] = useState(-1);
   const [playing, setPlaying] = useState(false);
@@ -108,28 +120,57 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const resolveCurrent = useCallback((track: Track) => {
-    const reqId = ++requestRef.current;
-    setError(null);
-    setResolved(null);
-    setLoading(true);
-    resolveStream(track.url)
-      .then((data) => {
-        if (requestRef.current !== reqId) return;
-        if (!data.audio && !data.video) {
-          setError("Không tìm thấy luồng phát cho nội dung này");
-          setLoading(false);
-          return;
-        }
-        setResolved(data);
-        setLoading(false);
-      })
-      .catch((e: Error) => {
-        if (requestRef.current !== reqId) return;
-        setError(e.message);
-        setLoading(false);
-      });
+  const stopMedia = useCallback(() => {
+    const el = mediaRef.current;
+    if (!el) return;
+    try {
+      el.pause();
+      el.removeAttribute("src");
+      el.load();
+    } catch {
+      /* ignore */
+    }
   }, []);
+
+  const resolveCurrent = useCallback(
+    (track: Track) => {
+      const reqId = ++requestRef.current;
+      setError(null);
+      setResolved(null);
+
+      const videoId = youtubeVideoId(track.url);
+      if (videoId) {
+        stopMedia();
+        const saved = loadNumber(posKey(track.id), 0);
+        setEmbedVideoId(videoId);
+        setEmbedStart(saved > 5 ? saved : 0);
+        setLoading(false);
+        pendingPlayRef.current = true;
+        return;
+      }
+
+      setEmbedVideoId(null);
+      setEmbedStart(0);
+      setLoading(true);
+      resolveStream(track.url)
+        .then((data) => {
+          if (requestRef.current !== reqId) return;
+          if (!data.audio && !data.video) {
+            setError("Không tìm thấy luồng phát cho nội dung này");
+            setLoading(false);
+            return;
+          }
+          setResolved(data);
+          setLoading(false);
+        })
+        .catch((e: Error) => {
+          if (requestRef.current !== reqId) return;
+          setError(e.message);
+          setLoading(false);
+        });
+    },
+    [stopMedia]
+  );
 
   const startTrack = useCallback(
     (track: Track, q?: Track[], at?: number) => {
@@ -168,12 +209,31 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [startTrack]
   );
 
+  const restart = useCallback(() => {
+    if (embedVideoId) {
+      embedRef.current?.seek(0);
+      embedRef.current?.play();
+      return;
+    }
+    const el = mediaRef.current;
+    if (el) {
+      el.currentTime = 0;
+      void el.play();
+    }
+  }, [embedVideoId]);
+
+  const pauseCurrent = useCallback(() => {
+    if (embedVideoId) {
+      embedRef.current?.pause();
+      return;
+    }
+    mediaRef.current?.pause();
+  }, [embedVideoId]);
+
   const advance = useCallback(
     (dir: 1 | -1, auto = false) => {
-      const el = mediaRef.current;
-      if (repeat === "one" && auto && el) {
-        el.currentTime = 0;
-        void el.play();
+      if (repeat === "one" && auto) {
+        restart();
         return;
       }
       if (!queue.length) return;
@@ -181,12 +241,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (nextIdx >= queue.length) nextIdx = repeat === "all" || !auto ? 0 : index;
       if (nextIdx < 0) nextIdx = queue.length - 1;
       if (nextIdx === index) {
-        if (auto && repeat === "all" && el) {
-          el.currentTime = 0;
-          void el.play();
-        } else if (auto) {
-          el?.pause();
-        }
+        if (auto && repeat === "all") restart();
+        else if (auto) pauseCurrent();
         return;
       }
       const track = queue[nextIdx];
@@ -196,55 +252,116 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       pushHistory(track);
       resolveCurrent(track);
     },
-    [queue, index, repeat, pushHistory, resolveCurrent]
+    [queue, index, repeat, pushHistory, resolveCurrent, restart, pauseCurrent]
   );
 
   const next = useCallback(() => advance(1, false), [advance]);
   const prev = useCallback(() => advance(-1, false), [advance]);
 
   const toggle = useCallback(() => {
+    if (!current) return;
+    if (embedVideoId) {
+      const yt = embedRef.current;
+      if (!yt) return;
+      const state = yt.getState();
+      if (state === 1 || state === 3) yt.pause();
+      else yt.play();
+      return;
+    }
     const el = mediaRef.current;
     if (!el) return;
-    if (!current) return;
     if (el.paused) {
       pendingPlayRef.current = true;
       void el.play().catch((e) => setError(e.message));
     } else {
       el.pause();
     }
-  }, [current]);
+  }, [current, embedVideoId]);
 
-  const seek = useCallback((seconds: number) => {
-    const el = mediaRef.current;
-    if (el) el.currentTime = seconds;
-    setPosition(seconds);
-  }, []);
+  const seek = useCallback(
+    (seconds: number) => {
+      if (embedVideoId) {
+        embedRef.current?.seek(seconds);
+        setPosition(seconds);
+        return;
+      }
+      const el = mediaRef.current;
+      if (el) el.currentTime = seconds;
+      setPosition(seconds);
+    },
+    [embedVideoId]
+  );
 
-  const setSpeed = useCallback((v: number) => {
-    setSpeedState(v);
-    if (mediaRef.current) mediaRef.current.playbackRate = v;
-  }, []);
+  const setSpeed = useCallback(
+    (v: number) => {
+      setSpeedState(v);
+      if (embedVideoId) {
+        embedRef.current?.setRate(v);
+        return;
+      }
+      if (mediaRef.current) mediaRef.current.playbackRate = v;
+    },
+    [embedVideoId]
+  );
 
-  const setVolume = useCallback((v: number) => {
-    setVolumeState(v);
-    if (mediaRef.current) {
-      mediaRef.current.volume = v;
-      mediaRef.current.muted = v === 0;
-    }
-    setMuted(v === 0);
-    try {
-      window.localStorage.setItem(VOLUME_KEY, String(v));
-    } catch {
-      /* ignore */
-    }
-  }, []);
+  const setVolume = useCallback(
+    (v: number) => {
+      setVolumeState(v);
+      if (embedVideoId) {
+        embedRef.current?.setVolume(v);
+        embedRef.current?.mute(v === 0);
+      } else if (mediaRef.current) {
+        mediaRef.current.volume = v;
+        mediaRef.current.muted = v === 0;
+      }
+      setMuted(v === 0);
+      try {
+        window.localStorage.setItem(VOLUME_KEY, String(v));
+      } catch {
+        /* ignore */
+      }
+    },
+    [embedVideoId]
+  );
 
   const toggleMute = useCallback(() => {
-    setMuted((m) => {
-      const nextMuted = !m;
-      if (mediaRef.current) mediaRef.current.muted = nextMuted;
-      return nextMuted;
-    });
+    const nextMuted = !muted;
+    if (embedVideoId) embedRef.current?.mute(nextMuted);
+    else if (mediaRef.current) mediaRef.current.muted = nextMuted;
+    setMuted(nextMuted);
+  }, [muted, embedVideoId]);
+
+  const isEmbed = embedVideoId !== null;
+
+  const onEmbedReady = useCallback(() => {
+    const yt = embedRef.current;
+    if (!yt) return;
+    yt.setVolume(volume);
+    yt.mute(muted || volume === 0);
+    yt.setRate(speed);
+    if (pendingPlayRef.current) {
+      pendingPlayRef.current = false;
+      yt.play();
+    }
+  }, [volume, muted, speed]);
+
+  const onEmbedState = useCallback(
+    (state: number) => {
+      if (state === 1) setPlaying(true);
+      else if (state === 0 || state === 2) setPlaying(false);
+      if (state === 0) advance(1, true);
+    },
+    [advance]
+  );
+
+  const onEmbedProgress = useCallback((time: number, dur: number) => {
+    setPosition(time);
+    if (dur && isFinite(dur)) setDuration(dur);
+  }, []);
+
+  const onEmbedError = useCallback((message: string) => {
+    setError(message);
+    setLoading(false);
   }, []);
 
   const toggleShuffle = useCallback(() => {
@@ -302,6 +419,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   /* Apply resolved stream to the media element */
   useEffect(() => {
+    if (embedVideoId) return;
     const el = mediaRef.current;
     if (!el || !resolved) return;
     const preferVideo = !audioOnly && resolved.video;
@@ -319,7 +437,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       el.play().catch((e) => setError(e.message));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [resolved, audioOnly]);
+  }, [resolved, audioOnly, embedVideoId]);
 
   /* Media element event wiring */
   useEffect(() => {
@@ -365,15 +483,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (!current) return;
     const id = current.id;
     const save = () => {
-      const el = mediaRef.current;
-      if (el && el.currentTime > 3) window.localStorage.setItem(posKey(id), String(Math.floor(el.currentTime)));
+      const seconds = embedVideoId
+        ? embedRef.current?.getCurrentTime() ?? 0
+        : mediaRef.current?.currentTime ?? 0;
+      if (seconds > 3) window.localStorage.setItem(posKey(id), String(Math.floor(seconds)));
     };
     const t = setInterval(save, 5000);
     return () => {
       clearInterval(t);
       save();
     };
-  }, [current]);
+  }, [current, embedVideoId]);
 
   /* Media Session (lock screen / control center) */
   useEffect(() => {
@@ -387,10 +507,20 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         artwork: current.thumbnail ? [{ src: current.thumbnail, sizes: "480x360", type: "image/jpeg" }] : [],
       });
       ms.setActionHandler("play", () => {
+        if (embedVideoId) {
+          embedRef.current?.play();
+          return;
+        }
         pendingPlayRef.current = true;
         void mediaRef.current?.play();
       });
-      ms.setActionHandler("pause", () => mediaRef.current?.pause());
+      ms.setActionHandler("pause", () => {
+        if (embedVideoId) {
+          embedRef.current?.pause();
+          return;
+        }
+        mediaRef.current?.pause();
+      });
       ms.setActionHandler("previoustrack", () => prev());
       ms.setActionHandler("nexttrack", () => next());
       ms.setActionHandler("seekbackward", (d) => seek(Math.max(0, position - (d.seekOffset || 10))));
@@ -414,11 +544,19 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         /* ignore */
       }
     };
-  }, [current, position, next, prev, seek]);
+  }, [current, position, next, prev, seek, embedVideoId]);
 
   const value = useMemo<PlayerContextValue>(
     () => ({
       mediaRef,
+      embedRef,
+      isEmbed,
+      embedVideoId,
+      embedStart,
+      onEmbedReady,
+      onEmbedState,
+      onEmbedProgress,
+      onEmbedError,
       current,
       resolved,
       queue,
@@ -458,6 +596,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       isCurrent,
     }),
     [
+      embedVideoId,
+      embedStart,
+      isEmbed,
+      onEmbedReady,
+      onEmbedState,
+      onEmbedProgress,
+      onEmbedError,
       current,
       resolved,
       queue,

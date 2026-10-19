@@ -19,12 +19,21 @@ import {
   VolumeX,
 } from "./Icons";
 import { QueuePanel } from "./QueuePanel";
+import { YouTubePlayer } from "./YouTubePlayer";
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
 
 export function FullPlayer() {
   const {
     mediaRef,
+    embedRef,
+    isEmbed,
+    embedVideoId,
+    embedStart,
+    onEmbedReady,
+    onEmbedState,
+    onEmbedProgress,
+    onEmbedError,
     current,
     resolved,
     expanded,
@@ -59,7 +68,7 @@ export function FullPlayer() {
     if (!expanded) setSpeedOpen(false);
   }, [expanded]);
 
-  const showArtwork = audioOnly || !resolved?.video;
+  const showArtwork = audioOnly || (!isEmbed && !resolved?.video);
   const pct = duration > 0 ? (position / duration) * 100 : 0;
 
   return (
@@ -86,8 +95,23 @@ export function FullPlayer() {
           <video
             ref={mediaRef}
             playsInline
-            className={cn("h-full w-full object-contain", showArtwork && "opacity-0")}
+            className={cn("h-full w-full object-contain", (showArtwork || isEmbed) && "opacity-0")}
           />
+          {isEmbed ? (
+            <YouTubePlayer
+              ref={embedRef}
+              videoId={embedVideoId}
+              startSeconds={embedStart}
+              className={cn(
+                "absolute inset-0 h-full w-full",
+                audioOnly && "pointer-events-none opacity-0"
+              )}
+              onReady={onEmbedReady}
+              onState={onEmbedState}
+              onProgress={onEmbedProgress}
+              onError={onEmbedError}
+            />
+          ) : null}
           {showArtwork ? (
             <div className="absolute inset-0 grid place-items-center p-8">
               {current?.thumbnail ? (

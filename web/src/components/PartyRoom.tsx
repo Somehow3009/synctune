@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { resolveStream } from "@/lib/api";
+import { fetchYouTubeMeta, resolveStream } from "@/lib/api";
 import { getPeerId } from "@/lib/realtime";
-import { proxyStreamUrl, formatTime, isSupportedUrl } from "@/lib/utils";
+import { proxyStreamUrl, formatTime, isSupportedUrl, youtubeVideoId } from "@/lib/utils";
 import { useParty } from "@/hooks/useParty";
 import { useVoiceChat } from "@/hooks/useVoiceChat";
+import { YouTubePlayer, type YouTubePlayerHandle } from "./YouTubePlayer";
 import {
   ChevronDown,
   ChevronUp,
@@ -44,9 +45,13 @@ export function PartyRoom({ roomId, user }: { roomId: string; user: Profile }) {
   } = party;
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const ytRef = useRef<YouTubePlayerHandle>(null);
   const loadedUrlRef = useRef<string | null>(null);
   const syncRef = useRef(sync);
   const resolvingRef = useRef<string | null>(null);
+
+  const embedVideoId = sync?.url ? youtubeVideoId(sync.url) : null;
+  const isEmbed = Boolean(embedVideoId);
 
   const [urlInput, setUrlInput] = useState("");
   const [chatInput, setChatInput] = useState("");
@@ -65,22 +70,44 @@ export function PartyRoom({ roomId, user }: { roomId: string; user: Profile }) {
     setMuted(!voiceEnabled);
   }, [voiceEnabled, setMuted]);
 
-  const applySync = useCallback((s: NonNullable<typeof sync>) => {
-    const el = videoRef.current;
-    if (!el) return;
-    const target = s.position + (s.playing ? (Date.now() - s.at) / 1000 : 0);
-    if (Number.isFinite(target) && Math.abs(el.currentTime - target) > 0.8) {
-      el.currentTime = Math.max(0, target);
-    }
-    if (s.playing && el.paused) el.play().catch(() => undefined);
-    if (!s.playing && !el.paused) el.pause();
-  }, []);
+  const applySync = useCallback(
+    (s: NonNullable<typeof sync>) => {
+      const target = s.position + (s.playing ? (Date.now() - s.at) / 1000 : 0);
+      if (youtubeVideoId(s.url)) {
+        const yt = ytRef.current;
+        if (!yt) return;
+        const current = yt.getCurrentTime();
+        if (Number.isFinite(target) && Math.abs(current - target) > 1.2) yt.seek(target);
+        if (s.playing) yt.play();
+        else yt.pause();
+        return;
+      }
+      const el = videoRef.current;
+      if (!el) return;
+      if (Number.isFinite(target) && Math.abs(el.currentTime - target) > 0.8) {
+        el.currentTime = Math.max(0, target);
+      }
+      if (s.playing && el.paused) el.play().catch(() => undefined);
+      if (!s.playing && !el.paused) el.pause();
+    },
+    []
+  );
 
   /* load media when the shared url changes */
   useEffect(() => {
     if (!sync?.url) return;
     if (loadedUrlRef.current === sync.url) {
       applySync(sync);
+      return;
+    }
+    if (isEmbed) {
+      loadedUrlRef.current = sync.url;
+      setStatus(null);
+      const el = videoRef.current;
+      if (el) {
+        el.pause();
+        el.removeAttribute("src");
+      }
       return;
     }
     if (resolvingRef.current === sync.url) return;
@@ -100,17 +127,25 @@ export function PartyRoom({ roomId, user }: { roomId: string; user: Profile }) {
         setTimeout(() => applySync(syncRef.current!), 300);
       })
       .catch((e: Error) => setStatus(e.message));
-  }, [sync, applySync]);
+  }, [sync, applySync, isEmbed]);
 
   /* periodic drift correction against the latest shared state */
   useEffect(() => {
     const t = setInterval(() => {
-      const el = videoRef.current;
       const s = syncRef.current;
-      if (!el || !s || !loadedUrlRef.current) return;
+      if (!s || !loadedUrlRef.current) return;
       if (!s.playing) return;
       const target = s.position + (Date.now() - s.at) / 1000;
-      if (Number.isFinite(target) && Math.abs(el.currentTime - target) > 1.5) {
+      if (!Number.isFinite(target)) return;
+      if (youtubeVideoId(s.url)) {
+        const yt = ytRef.current;
+        if (!yt) return;
+        if (Math.abs(yt.getCurrentTime() - target) > 2) yt.seek(target);
+        return;
+      }
+      const el = videoRef.current;
+      if (!el) return;
+      if (Math.abs(el.currentTime - target) > 1.5) {
         el.currentTime = Math.max(0, target);
       }
     }, 4000);
@@ -118,8 +153,21 @@ export function PartyRoom({ roomId, user }: { roomId: string; user: Profile }) {
   }, []);
 
   function togglePlay() {
+    if (!sync?.url) return;
+    if (isEmbed) {
+      const yt = ytRef.current;
+      if (!yt) return;
+      if (sync.playing) {
+        yt.pause();
+        updateSync({ url: sync.url, playing: false, position: yt.getCurrentTime() });
+      } else {
+        yt.play();
+        updateSync({ url: sync.url, playing: true, position: yt.getCurrentTime() });
+      }
+      return;
+    }
     const el = videoRef.current;
-    if (!el || !sync?.url) return;
+    if (!el) return;
     if (el.paused) {
       void el.play();
       updateSync({ url: sync.url, playing: true, position: el.currentTime });
@@ -130,8 +178,17 @@ export function PartyRoom({ roomId, user }: { roomId: string; user: Profile }) {
   }
 
   function seekBy(delta: number) {
+    if (!sync?.url) return;
+    if (isEmbed) {
+      const yt = ytRef.current;
+      if (!yt) return;
+      const pos = Math.max(0, yt.getCurrentTime() + delta);
+      yt.seek(pos);
+      updateSync({ url: sync.url, position: pos, playing: !!sync.playing });
+      return;
+    }
     const el = videoRef.current;
-    if (!el || !sync?.url) return;
+    if (!el) return;
     const pos = Math.max(0, el.currentTime + delta);
     el.currentTime = pos;
     updateSync({ url: sync.url, position: pos, playing: !el.paused });
@@ -151,6 +208,27 @@ export function PartyRoom({ roomId, user }: { roomId: string; user: Profile }) {
     }
     setStatus("Đang lấy thông tin...");
     try {
+      const videoId = youtubeVideoId(u);
+      if (videoId) {
+        const meta = await fetchYouTubeMeta(videoId);
+        const item = addToQueue({
+          url: `https://www.youtube.com/watch?v=${videoId}`,
+          title: meta.title,
+          thumbnail: meta.thumbnail ?? null,
+        });
+        setUrlInput("");
+        setStatus(null);
+        if (playNow || !sync?.url) {
+          updateSync({
+            url: item.url,
+            title: item.title,
+            thumbnail: item.thumbnail ?? null,
+            position: 0,
+            playing: true,
+          });
+        }
+        return;
+      }
       const data = await resolveStream(u);
       const item = addToQueue({
         url: data.webpage_url,
@@ -179,7 +257,23 @@ export function PartyRoom({ roomId, user }: { roomId: string; user: Profile }) {
     <div className="grid gap-4 lg:grid-cols-[1fr_340px]">
       <div className="space-y-4">
         <div className="relative aspect-video w-full overflow-hidden rounded-2xl bg-black shadow-lg">
-          <video ref={videoRef} playsInline className="h-full w-full object-contain" />
+          <video
+            ref={videoRef}
+            playsInline
+            className={cn("h-full w-full object-contain", isEmbed && "opacity-0")}
+          />
+          {isEmbed ? (
+            <YouTubePlayer
+              ref={ytRef}
+              videoId={embedVideoId}
+              startSeconds={sync?.position ?? 0}
+              className="absolute inset-0 h-full w-full"
+              onReady={() => {
+                if (syncRef.current) applySync(syncRef.current);
+              }}
+              onError={(message) => setStatus(message)}
+            />
+          ) : null}
           {!sync?.url ? (
             <div className="absolute inset-0 grid place-items-center text-center text-white/60">
               <div className="space-y-2 p-6">

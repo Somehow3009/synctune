@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { resolveStream } from "@/lib/api";
+import { fetchYouTubeMeta, resolveStream } from "@/lib/api";
 import { trackFromResolved } from "@/lib/track";
-import { detectSource, formatTime, isSupportedUrl } from "@/lib/utils";
+import { detectSource, formatTime, isSupportedUrl, youtubeVideoId } from "@/lib/utils";
 import { usePlayer } from "@/context/PlayerContext";
 import { TrackMenu } from "@/components/TrackMenu";
 import { Headphones, Link as LinkIcon, Plus, VideoIcon } from "@/components/Icons";
@@ -30,6 +30,26 @@ export default function AddPage() {
     setResolved(null);
     setTrack(null);
     try {
+      const videoId = youtubeVideoId(u);
+      if (videoId) {
+        const meta = await fetchYouTubeMeta(videoId);
+        const info: ResolvedStream = {
+          id: videoId,
+          title: meta.title,
+          uploader: meta.uploader ?? null,
+          thumbnail: meta.thumbnail ?? null,
+          duration: null,
+          source: "youtube",
+          webpage_url: `https://www.youtube.com/watch?v=${videoId}`,
+          audio: { url: "youtube-embed", mime: "audio/mp4" },
+          video: { url: "youtube-embed", mime: "video/mp4" },
+          resolvedAt: new Date().toISOString(),
+          expiresIn: 0,
+        };
+        setResolved(info);
+        setTrack(trackFromResolved(info));
+        return;
+      }
       const data = await resolveStream(u);
       setResolved(data);
       setTrack(trackFromResolved(data));
