@@ -128,6 +128,25 @@ def _cookie_file() -> str | None:
         return _cookie_file_path
 
 
+def _cookie_header() -> str | None:
+    try:
+        path = _cookie_file()
+    except OSError:
+        return None
+    if not path:
+        return None
+    pairs: list[str] = []
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 7:
+                pairs.append(f"{parts[5]}={parts[6]}")
+    return "; ".join(pairs) if pairs else None
+
+
 def cookies_configured() -> bool:
     if settings.cookies_from_browser:
         return True

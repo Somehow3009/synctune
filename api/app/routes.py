@@ -11,6 +11,7 @@ from .config import settings
 from .ytdlp_service import (
     USER_AGENT,
     ExtractionError,
+    _cookie_header,
     cookie_report,
     cookies_configured,
     parse_extractor_args,
@@ -20,8 +21,6 @@ from .ytdlp_service import (
 )
 
 router = APIRouter()
-
-UPSTREAM_USER_AGENT = USER_AGENT
 
 FORWARD_HEADERS = (
     "content-type",
@@ -122,12 +121,16 @@ async def stream_endpoint(request: Request, src: str = Query(..., min_length=1))
         raise HTTPException(status_code=400, detail="Host not allowed for proxying")
 
     upstream_headers = {
-        "User-Agent": UPSTREAM_USER_AGENT,
-        "Accept": "*/*",
+        "User-Agent": USER_AGENT,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "en-us,en;q=0.5",
-        "Origin": "https://www.youtube.com",
-        "Referer": "https://www.youtube.com/",
+        "Sec-Fetch-Mode": "navigate",
     }
+    host = (urlparse(src).hostname or "").lower()
+    if "youtube" in host or "googlevideo" in host or "ytimg" in host:
+        cookie = _cookie_header()
+        if cookie:
+            upstream_headers["Cookie"] = cookie
     range_header = request.headers.get("range")
     if range_header:
         upstream_headers["Range"] = range_header
