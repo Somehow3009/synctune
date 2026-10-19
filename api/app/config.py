@@ -24,6 +24,10 @@ class Settings:
         self.player_clients: list[str] = _split_csv(
             os.getenv("YTDLP_PLAYER_CLIENT", "")
         )
+        self.js_runtime_path: str = os.getenv("YTDLP_JS_RUNTIME", "").strip()
+        self.remote_components: list[str] = _split_csv(
+            os.getenv("YTDLP_REMOTE_COMPONENTS", "")
+        )
         self.debug_token: str = os.getenv("DEBUG_TOKEN", "").strip()
         self.proxy_allowed_hosts: list[str] = _split_csv(
             os.getenv("PROXY_ALLOWED_HOSTS", DEFAULT_PROXY_HOSTS)

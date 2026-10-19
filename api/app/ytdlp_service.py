@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 import threading
 import time
@@ -129,6 +130,34 @@ def cookies_configured() -> bool:
         return False
 
 
+_API_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_js_runtime_cache: dict[str, Any] | None = None
+
+
+def _resolve_deno_path() -> str | None:
+    candidates = [
+        settings.js_runtime_path,
+        "/usr/local/bin/deno",
+        os.path.join(_API_DIR, "bin", "deno"),
+        os.path.join(_API_DIR, ".deno", "bin", "deno"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        path = candidate if os.path.isabs(candidate) else os.path.join(_API_DIR, candidate)
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return path
+    return shutil.which("deno")
+
+
+def js_runtimes() -> dict[str, Any]:
+    global _js_runtime_cache
+    if _js_runtime_cache is None:
+        path = _resolve_deno_path()
+        _js_runtime_cache = {"deno": {"path": path}} if path else {}
+    return _js_runtime_cache
+
+
 class TTLCache:
     def __init__(self, ttl: int) -> None:
         self._ttl = ttl
@@ -193,6 +222,11 @@ def base_opts() -> dict[str, Any]:
         opts["extractor_args"] = {
             "youtube": {"player_client": list(settings.player_clients)}
         }
+    runtimes = js_runtimes()
+    if runtimes:
+        opts["js_runtimes"] = runtimes
+    if settings.remote_components:
+        opts["remote_components"] = list(settings.remote_components)
     return opts
 
 
@@ -259,14 +293,40 @@ def cookie_report() -> dict[str, Any]:
 
     report["ytdlp_version"] = getattr(yt_dlp.version, "__version__", "unknown")
     report["player_clients_env"] = list(settings.player_clients)
+    report["js_runtime"] = _resolve_deno_path()
+    report["remote_components_env"] = list(settings.remote_components)
     return report
 
 
-def probe(url: str, clients: list[str]) -> list[dict[str, Any]]:
+class LogCapture:
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def debug(self, message: str) -> None:
+        self.lines.append(str(message))
+
+    def info(self, message: str) -> None:
+        self.lines.append(str(message))
+
+    def warning(self, message: str) -> None:
+        self.lines.append(f"WARNING: {message}")
+
+    def error(self, message: str) -> None:
+        self.lines.append(f"ERROR: {message}")
+
+
+def probe(url: str, clients: list[str], verbose: bool = False) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for client in clients:
         opts = base_opts()
-        opts["extractor_args"] = {"youtube": {"player_client": [client]}}
+        if client != "default":
+            opts["extractor_args"] = {"youtube": {"player_client": [client]}}
+        capture = LogCapture() if verbose else None
+        if capture is not None:
+            opts["verbose"] = True
+            opts["quiet"] = False
+            opts["no_warnings"] = False
+            opts["logger"] = capture
         entry: dict[str, Any] = {"client": client}
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
@@ -275,9 +335,17 @@ def probe(url: str, clients: list[str]) -> list[dict[str, Any]]:
             entry["ok"] = True
             entry["title"] = (info or {}).get("title")
             entry["formats"] = len(formats)
+            audio = [
+                f
+                for f in formats
+                if f.get("vcodec") == "none" and f.get("acodec") not in (None, "none")
+            ]
+            entry["audio_formats"] = len(audio)
         except Exception as exc:  # noqa: BLE001
             entry["ok"] = False
             entry["error"] = str(exc)[:300]
+        if capture is not None:
+            entry["log"] = capture.lines[-70:]
         results.append(entry)
     return results
 
