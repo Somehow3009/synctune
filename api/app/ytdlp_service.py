@@ -19,6 +19,12 @@ class ExtractionError(Exception):
     pass
 
 
+USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+)
+
+
 def _json_cookies_to_netscape(text: str) -> str | None:
     try:
         data = json.loads(text)
@@ -272,6 +278,7 @@ def base_opts() -> dict[str, Any]:
         "noplaylist": True,
         "skip_download": True,
         "nocheckcertificate": True,
+        "http_headers": {"User-Agent": USER_AGENT},
     }
     if settings.cookies_from_browser:
         parts = settings.cookies_from_browser.split(":")

@@ -9,6 +9,7 @@ from starlette.concurrency import run_in_threadpool
 
 from .config import settings
 from .ytdlp_service import (
+    USER_AGENT,
     ExtractionError,
     cookie_report,
     cookies_configured,
@@ -20,10 +21,7 @@ from .ytdlp_service import (
 
 router = APIRouter()
 
-UPSTREAM_USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-)
+UPSTREAM_USER_AGENT = USER_AGENT
 
 FORWARD_HEADERS = (
     "content-type",
