@@ -452,6 +452,17 @@ def probe(
             entry["ok"] = True
             entry["title"] = (info or {}).get("title")
             entry["formats"] = len(formats)
+            entry["format_details"] = [
+                {
+                    "format_id": f.get("format_id"),
+                    "ext": f.get("ext"),
+                    "vcodec": f.get("vcodec"),
+                    "acodec": f.get("acodec"),
+                    "protocol": f.get("protocol"),
+                    "has_url": bool(f.get("url")),
+                }
+                for f in formats[:20]
+            ]
             audio = [
                 f
                 for f in formats

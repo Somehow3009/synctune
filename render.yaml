@@ -30,6 +30,6 @@ services:
       - key: YTDLP_COOKIEFILE
         sync: false
       - key: YTDLP_REMOTE_COMPONENTS
-        sync: false
+        value: "ejs:github"
       - key: DEBUG_TOKEN
         sync: false
