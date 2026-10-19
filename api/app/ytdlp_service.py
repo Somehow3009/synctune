@@ -389,6 +389,14 @@ def cookie_report() -> dict[str, Any]:
             report[key] = sorted(os.listdir(path))[:40]
         except OSError:
             report[key] = []
+    try:
+        report["fs_bgutil_tree"] = sorted(
+            os.path.relpath(os.path.join(root, name), os.path.join(_API_DIR, "bgutil"))
+            for root, _dirs, files in os.walk(os.path.join(_API_DIR, "bgutil"))
+            for name in files
+        )[:80]
+    except OSError:
+        report["fs_bgutil_tree"] = []
     return report
 
 
