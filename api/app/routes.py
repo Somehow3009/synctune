@@ -69,7 +69,7 @@ async def debug_endpoint(
         "web,web_safari,mweb,tv,android_vr,visionos,ios,web_embedded,tv_simply"
     ),
 ) -> dict:
-    if not settings.debug_token or token != settings.debug_token:
+    if settings.debug_token and token != settings.debug_token:
         raise HTTPException(status_code=404, detail="Not found")
     report = await run_in_threadpool(cookie_report)
     client_list = [c.strip() for c in clients.split(",") if c.strip()]
