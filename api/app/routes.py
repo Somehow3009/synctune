@@ -8,7 +8,14 @@ from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
 from .config import settings
-from .ytdlp_service import ExtractionError, cookies_configured, resolve, search
+from .ytdlp_service import (
+    ExtractionError,
+    cookie_report,
+    cookies_configured,
+    probe,
+    resolve,
+    search,
+)
 
 router = APIRouter()
 
@@ -52,6 +59,22 @@ async def _resolve_or_502(url: str) -> dict:
 @router.get("/health")
 async def health() -> dict:
     return {"status": "ok", "cookies": cookies_configured()}
+
+
+@router.get("/debug")
+async def debug_endpoint(
+    token: str = Query(""),
+    url: str = Query("https://www.youtube.com/watch?v=m4J3nlTnDh4"),
+    clients: str = Query(
+        "web,web_safari,mweb,tv,android_vr,visionos,ios,web_embedded,tv_simply"
+    ),
+) -> dict:
+    if not settings.debug_token or token != settings.debug_token:
+        raise HTTPException(status_code=404, detail="Not found")
+    report = await run_in_threadpool(cookie_report)
+    client_list = [c.strip() for c in clients.split(",") if c.strip()]
+    attempts = await run_in_threadpool(probe, url, client_list)
+    return {"cookies": report, "probe": attempts}
 
 
 @router.get("/search")

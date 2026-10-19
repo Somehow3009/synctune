@@ -21,6 +21,10 @@ class Settings:
         self.cookies_from_browser: str = os.getenv("YTDLP_COOKIES_FROM_BROWSER", "").strip()
         self.cookiefile: str = os.getenv("YTDLP_COOKIEFILE", "").strip()
         self.cookies_text: str = os.getenv("YTDLP_COOKIES", "")
+        self.player_clients: list[str] = _split_csv(
+            os.getenv("YTDLP_PLAYER_CLIENT", "")
+        )
+        self.debug_token: str = os.getenv("DEBUG_TOKEN", "").strip()
         self.proxy_allowed_hosts: list[str] = _split_csv(
             os.getenv("PROXY_ALLOWED_HOSTS", DEFAULT_PROXY_HOSTS)
         )

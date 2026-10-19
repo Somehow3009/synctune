@@ -125,7 +125,97 @@ def base_opts() -> dict[str, Any]:
         cookie_file = _cookie_file()
         if cookie_file:
             opts["cookiefile"] = cookie_file
+    if settings.player_clients:
+        opts["extractor_args"] = {
+            "youtube": {"player_client": list(settings.player_clients)}
+        }
     return opts
+
+
+IMPORTANT_COOKIE_NAMES = (
+    "SID",
+    "HSID",
+    "SSID",
+    "APISID",
+    "SAPISID",
+    "LOGIN_INFO",
+    "__Secure-1PSID",
+    "__Secure-3PSID",
+    "__Secure-1PAPISID",
+    "__Secure-3PAPISID",
+    "SIDCC",
+)
+
+
+def cookie_report() -> dict[str, Any]:
+    if settings.cookies_from_browser:
+        report: dict[str, Any] = {
+            "source": "browser",
+            "value": settings.cookies_from_browser,
+        }
+    elif settings.cookiefile or settings.cookies_text.strip():
+        source = "file" if settings.cookiefile else "inline"
+        path = _cookie_file()
+        report = {"source": source, "source_path": settings.cookiefile or None}
+        text = ""
+        if path and os.path.exists(path):
+            with open(path, "r", encoding="utf-8", errors="replace") as handle:
+                text = handle.read()
+        lines = [ln for ln in text.splitlines() if ln.strip()]
+        data_lines = [ln for ln in lines if not ln.startswith("#")]
+        names: set[str] = set()
+        domains: set[str] = set()
+        for line in data_lines:
+            parts = line.split("\t")
+            if len(parts) >= 7:
+                domains.add(parts[0].lstrip("."))
+                names.add(parts[5])
+        report.update(
+            {
+                "bytes": len(text),
+                "lines": len(lines),
+                "cookie_count": len(data_lines),
+                "domains": sorted(domains),
+                "present": [n for n in IMPORTANT_COOKIE_NAMES if n in names],
+                "first_line": lines[0][:80] if lines else "",
+            }
+        )
+    else:
+        report = {"source": "none"}
+
+    try:
+        with yt_dlp.YoutubeDL(base_opts()) as ydl:
+            jar = list(ydl.cookiejar)
+            report["jar_total"] = len(jar)
+            report["jar_youtube"] = len(
+                [c for c in jar if "youtube.com" in (c.domain or "")]
+            )
+    except Exception as exc:  # noqa: BLE001
+        report["jar_error"] = f"{type(exc).__name__}: {exc}"
+
+    report["ytdlp_version"] = getattr(yt_dlp.version, "__version__", "unknown")
+    report["player_clients_env"] = list(settings.player_clients)
+    return report
+
+
+def probe(url: str, clients: list[str]) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for client in clients:
+        opts = base_opts()
+        opts["extractor_args"] = {"youtube": {"player_client": [client]}}
+        entry: dict[str, Any] = {"client": client}
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            formats = (info or {}).get("formats") or []
+            entry["ok"] = True
+            entry["title"] = (info or {}).get("title")
+            entry["formats"] = len(formats)
+        except Exception as exc:  # noqa: BLE001
+            entry["ok"] = False
+            entry["error"] = str(exc)[:300]
+        results.append(entry)
+    return results
 
 
 def _detect_source(url: str) -> str:
