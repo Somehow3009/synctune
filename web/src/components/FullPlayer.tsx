@@ -26,7 +26,6 @@ const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
 export function FullPlayer() {
   const {
     mediaRef,
-    audioRef,
     embedRef,
     isEmbed,
     embedVideoId,
@@ -101,7 +100,6 @@ export function FullPlayer() {
               (showArtwork || isEmbed || (audioOnly && !!resolved?.audio?.url)) && "opacity-0"
             )}
           />
-          <audio ref={audioRef} preload="metadata" className="hidden" aria-hidden="true" />
           {isEmbed ? (
             <YouTubePlayer
               ref={embedRef}

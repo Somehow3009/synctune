@@ -84,6 +84,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const embedRef = useRef<YouTubePlayerHandle>(null);
   const pendingPlayRef = useRef(false);
   const requestRef = useRef(0);
+  const lastPositionSyncRef = useRef(0);
 
   const [current, setCurrent] = useState<Track | null>(null);
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
@@ -600,6 +601,35 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       }
     };
   }, [current, position, next, prev, seek, embedVideoId, getActiveMedia]);
+
+  /* Keep the OS media session state in sync (lock screen / control center) */
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    try {
+      navigator.mediaSession.playbackState = playing ? "playing" : "paused";
+    } catch {
+      /* ignore */
+    }
+  }, [playing]);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    const ms = navigator.mediaSession;
+    if (!("setPositionState" in ms)) return;
+    if (!duration || !isFinite(duration) || duration <= 0) return;
+    const now = Date.now();
+    if (now - lastPositionSyncRef.current < 1000) return;
+    lastPositionSyncRef.current = now;
+    try {
+      ms.setPositionState({
+        duration,
+        position: Math.max(0, Math.min(position, duration)),
+        playbackRate: speed,
+      });
+    } catch {
+      /* ignore */
+    }
+  }, [position, duration, speed]);
 
   const value = useMemo<PlayerContextValue>(
     () => ({
