@@ -8,6 +8,7 @@ import type { ResolvedStream, RepeatMode, StreamFormat, Track } from "@/lib/type
 
 interface PlayerContextValue {
   mediaRef: React.RefObject<HTMLVideoElement>;
+  audioRef: React.RefObject<HTMLAudioElement>;
   embedRef: React.RefObject<YouTubePlayerHandle>;
   isEmbed: boolean;
   embedVideoId: string | null;
@@ -79,6 +80,7 @@ function loadHistory(): Track[] {
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const mediaRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const embedRef = useRef<YouTubePlayerHandle>(null);
   const pendingPlayRef = useRef(false);
   const requestRef = useRef(0);
@@ -108,6 +110,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setHistory(loadHistory());
   }, []);
 
+  const getActiveMedia = useCallback((): HTMLAudioElement | HTMLVideoElement | null => {
+    const useAudio = !!resolved?.audio?.url && (audioOnly || !resolved.video?.url);
+    return useAudio ? audioRef.current : mediaRef.current;
+  }, [audioOnly, resolved]);
+
   const pushHistory = useCallback((track: Track) => {
     setHistory((prev) => {
       const next = [track, ...prev.filter((t) => t.url !== track.url)].slice(0, 50);
@@ -121,26 +128,28 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const stopMedia = useCallback(() => {
-    const el = mediaRef.current;
-    if (!el) return;
-    try {
-      el.pause();
-      el.removeAttribute("src");
-      el.load();
-    } catch {
-      /* ignore */
+    for (const el of [mediaRef.current, audioRef.current]) {
+      if (!el) continue;
+      try {
+        el.pause();
+        el.removeAttribute("src");
+        el.load();
+      } catch {
+        /* ignore */
+      }
     }
   }, []);
 
   const resolveCurrent = useCallback(
     (track: Track) => {
       const reqId = ++requestRef.current;
+
+      stopMedia();
       setError(null);
       setResolved(null);
 
       const videoId = youtubeVideoId(track.url);
       if (videoId) {
-        stopMedia();
         const saved = loadNumber(posKey(track.id), 0);
         setEmbedVideoId(videoId);
         setEmbedStart(saved > 5 ? saved : 0);
@@ -215,20 +224,20 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       embedRef.current?.play();
       return;
     }
-    const el = mediaRef.current;
+    const el = getActiveMedia();
     if (el) {
       el.currentTime = 0;
-      void el.play();
+      void el.play().catch((e) => setError(e.message));
     }
-  }, [embedVideoId]);
+  }, [embedVideoId, getActiveMedia]);
 
   const pauseCurrent = useCallback(() => {
     if (embedVideoId) {
       embedRef.current?.pause();
       return;
     }
-    mediaRef.current?.pause();
-  }, [embedVideoId]);
+    getActiveMedia()?.pause();
+  }, [embedVideoId, getActiveMedia]);
 
   const advance = useCallback(
     (dir: 1 | -1, auto = false) => {
@@ -268,15 +277,18 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       else yt.play();
       return;
     }
-    const el = mediaRef.current;
+    const el = getActiveMedia();
     if (!el) return;
     if (el.paused) {
       pendingPlayRef.current = true;
-      void el.play().catch((e) => setError(e.message));
+      void el.play().catch((e) => {
+        pendingPlayRef.current = false;
+        setError(e.message);
+      });
     } else {
       el.pause();
     }
-  }, [current, embedVideoId]);
+  }, [current, embedVideoId, getActiveMedia]);
 
   const seek = useCallback(
     (seconds: number) => {
@@ -285,11 +297,11 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         setPosition(seconds);
         return;
       }
-      const el = mediaRef.current;
+      const el = getActiveMedia();
       if (el) el.currentTime = seconds;
       setPosition(seconds);
     },
-    [embedVideoId]
+    [embedVideoId, getActiveMedia]
   );
 
   const setSpeed = useCallback(
@@ -299,9 +311,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         embedRef.current?.setRate(v);
         return;
       }
-      if (mediaRef.current) mediaRef.current.playbackRate = v;
+      const el = getActiveMedia();
+      if (el) el.playbackRate = v;
     },
-    [embedVideoId]
+    [embedVideoId, getActiveMedia]
   );
 
   const setVolume = useCallback(
@@ -310,9 +323,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (embedVideoId) {
         embedRef.current?.setVolume(v);
         embedRef.current?.mute(v === 0);
-      } else if (mediaRef.current) {
-        mediaRef.current.volume = v;
-        mediaRef.current.muted = v === 0;
+      } else {
+        const el = getActiveMedia();
+        if (el) {
+          el.volume = v;
+          el.muted = v === 0;
+        }
       }
       setMuted(v === 0);
       try {
@@ -321,15 +337,19 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         /* ignore */
       }
     },
-    [embedVideoId]
+    [embedVideoId, getActiveMedia]
   );
 
   const toggleMute = useCallback(() => {
     const nextMuted = !muted;
-    if (embedVideoId) embedRef.current?.mute(nextMuted);
-    else if (mediaRef.current) mediaRef.current.muted = nextMuted;
+    if (embedVideoId) {
+      embedRef.current?.mute(nextMuted);
+    } else {
+      const el = getActiveMedia();
+      if (el) el.muted = nextMuted;
+    }
     setMuted(nextMuted);
-  }, [muted, embedVideoId]);
+  }, [muted, embedVideoId, getActiveMedia]);
 
   const isEmbed = embedVideoId !== null;
 
@@ -417,66 +437,101 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const isCurrent = useCallback((track: Track) => current?.url === track.url, [current]);
 
-  /* Apply resolved stream to the media element */
+  /* Apply the resolved stream to the active media element */
   useEffect(() => {
-    if (embedVideoId) return;
-    const el = mediaRef.current;
-    if (!el || !resolved) return;
-    const preferVideo = !audioOnly && resolved.video;
-    const fmt: StreamFormat | null | undefined = preferVideo ? resolved.video : resolved.audio || resolved.video;
-    if (!fmt?.url) {
+    if (embedVideoId || !resolved) return;
+
+    const useAudio = !!resolved.audio?.url && (audioOnly || !resolved.video?.url);
+    const fmt: StreamFormat | null | undefined = useAudio ? resolved.audio : resolved.video || resolved.audio;
+    const el = useAudio ? audioRef.current : mediaRef.current;
+    const other = useAudio ? mediaRef.current : audioRef.current;
+
+    if (!fmt?.url || !el) {
       setError("Không tìm thấy luồng phát phù hợp");
       return;
     }
+
+    const wasPlaying =
+      pendingPlayRef.current ||
+      [mediaRef.current, audioRef.current].some((m) => m && !m.paused && m.readyState > 0);
+
+    if (other) {
+      other.pause();
+      other.removeAttribute("src");
+      other.load();
+    }
+
     el.src = proxyStreamUrl(fmt.url);
     el.playbackRate = speed;
     el.volume = volume;
     el.muted = muted;
-    if (pendingPlayRef.current) {
+    el.load();
+
+    if (wasPlaying) {
       pendingPlayRef.current = false;
-      el.play().catch((e) => setError(e.message));
+      el.play().catch((e) => setError(e.message || "Không thể tự động phát. Hãy nhấn Phát."));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resolved, audioOnly, embedVideoId]);
 
   /* Media element event wiring */
   useEffect(() => {
-    const el = mediaRef.current;
-    if (!el) return;
+    const elements = [mediaRef.current, audioRef.current].filter(
+      (el): el is HTMLMediaElement => el !== null
+    );
 
-    const onPlay = () => setPlaying(true);
-    const onPause = () => setPlaying(false);
-    const onTime = () => {
+    const isActive = (el: HTMLMediaElement) => el === getActiveMedia();
+
+    const onPlay = (event: Event) => {
+      if (isActive(event.currentTarget as HTMLMediaElement)) setPlaying(true);
+    };
+    const onPause = (event: Event) => {
+      if (isActive(event.currentTarget as HTMLMediaElement)) setPlaying(false);
+    };
+    const onTime = (event: Event) => {
+      const el = event.currentTarget as HTMLMediaElement;
+      if (!isActive(el)) return;
       setPosition(el.currentTime);
       if (el.duration && isFinite(el.duration)) setDuration(el.duration);
     };
-    const onMeta = () => {
+    const onMeta = (event: Event) => {
+      const el = event.currentTarget as HTMLMediaElement;
+      if (!isActive(el)) return;
       setDuration(el.duration || 0);
       if (current) {
         const saved = loadNumber(posKey(current.id), 0);
         if (saved > 5 && el.duration && saved < el.duration - 5) el.currentTime = saved;
       }
     };
-    const onEnded = () => advance(1, true);
-    const onError = () => {
-      if (el.src) setError("Lỗi phát nội dung (nguồn có thể đã hết hạn, thử phát lại)");
+    const onEnded = (event: Event) => {
+      if (isActive(event.currentTarget as HTMLMediaElement)) advance(1, true);
+    };
+    const onError = (event: Event) => {
+      const el = event.currentTarget as HTMLMediaElement;
+      if (isActive(el) && el.currentSrc) {
+        setError("Lỗi phát nội dung (nguồn có thể đã hết hạn, thử phát lại)");
+      }
     };
 
-    el.addEventListener("play", onPlay);
-    el.addEventListener("pause", onPause);
-    el.addEventListener("timeupdate", onTime);
-    el.addEventListener("loadedmetadata", onMeta);
-    el.addEventListener("ended", onEnded);
-    el.addEventListener("error", onError);
+    for (const el of elements) {
+      el.addEventListener("play", onPlay);
+      el.addEventListener("pause", onPause);
+      el.addEventListener("timeupdate", onTime);
+      el.addEventListener("loadedmetadata", onMeta);
+      el.addEventListener("ended", onEnded);
+      el.addEventListener("error", onError);
+    }
     return () => {
-      el.removeEventListener("play", onPlay);
-      el.removeEventListener("pause", onPause);
-      el.removeEventListener("timeupdate", onTime);
-      el.removeEventListener("loadedmetadata", onMeta);
-      el.removeEventListener("ended", onEnded);
-      el.removeEventListener("error", onError);
+      for (const el of elements) {
+        el.removeEventListener("play", onPlay);
+        el.removeEventListener("pause", onPause);
+        el.removeEventListener("timeupdate", onTime);
+        el.removeEventListener("loadedmetadata", onMeta);
+        el.removeEventListener("ended", onEnded);
+        el.removeEventListener("error", onError);
+      }
     };
-  }, [advance, current]);
+  }, [advance, current, getActiveMedia]);
 
   /* Persist playback position */
   useEffect(() => {
@@ -485,7 +540,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const save = () => {
       const seconds = embedVideoId
         ? embedRef.current?.getCurrentTime() ?? 0
-        : mediaRef.current?.currentTime ?? 0;
+        : getActiveMedia()?.currentTime ?? 0;
       if (seconds > 3) window.localStorage.setItem(posKey(id), String(Math.floor(seconds)));
     };
     const t = setInterval(save, 5000);
@@ -493,7 +548,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       clearInterval(t);
       save();
     };
-  }, [current, embedVideoId]);
+  }, [current, embedVideoId, getActiveMedia]);
 
   /* Media Session (lock screen / control center) */
   useEffect(() => {
@@ -511,15 +566,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           embedRef.current?.play();
           return;
         }
-        pendingPlayRef.current = true;
-        void mediaRef.current?.play();
+        const el = getActiveMedia();
+        if (el) void el.play().catch((e) => setError(e.message));
       });
       ms.setActionHandler("pause", () => {
         if (embedVideoId) {
           embedRef.current?.pause();
           return;
         }
-        mediaRef.current?.pause();
+        getActiveMedia()?.pause();
       });
       ms.setActionHandler("previoustrack", () => prev());
       ms.setActionHandler("nexttrack", () => next());
@@ -544,11 +599,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         /* ignore */
       }
     };
-  }, [current, position, next, prev, seek, embedVideoId]);
+  }, [current, position, next, prev, seek, embedVideoId, getActiveMedia]);
 
   const value = useMemo<PlayerContextValue>(
     () => ({
       mediaRef,
+      audioRef,
       embedRef,
       isEmbed,
       embedVideoId,
