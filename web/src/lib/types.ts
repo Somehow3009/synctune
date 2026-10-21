@@ -73,6 +73,11 @@ export interface ResolvedStream {
 
 export type RepeatMode = "off" | "one" | "all";
 
+export interface QueueSource {
+  type: "playlist";
+  id: string;
+}
+
 export interface ChatMessage {
   id: string;
   name: string;

@@ -149,6 +149,12 @@ export function FullPlayer() {
         <div className="mb-3 text-center">
           <h1 className="line-clamp-2 text-lg font-semibold">{current?.title || "Chưa chọn bài"}</h1>
           <p className="truncate text-sm text-white/60">{current?.uploader || "SyncTune"}</p>
+          {isEmbed && audioOnly ? (
+            <p className="mx-auto mt-1 max-w-md text-xs text-amber-300/80">
+              YouTube không cho phát nền trên iPhone: nhạc sẽ dừng khi khoá màn hình hoặc chuyển app. Muốn nghe nền,
+              hãy dùng nguồn có link audio trực tiếp.
+            </p>
+          ) : null}
         </div>
 
         <div className="mb-1 flex items-center gap-3">
@@ -168,7 +174,7 @@ export function FullPlayer() {
 
         <div className="mt-3 flex items-center justify-center gap-4">
           <button
-            onClick={toggleShuffle}
+            onClick={() => toggleShuffle()}
             className={cn("st-btn-ghost !text-white/70 hover:!bg-white/10", shuffle && "!text-brand-400")}
             title="Phát ngẫu nhiên"
           >

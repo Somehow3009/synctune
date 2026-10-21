@@ -3,8 +3,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { resolveStream } from "@/lib/api";
 import { proxyStreamUrl, shuffleArray, youtubeVideoId } from "@/lib/utils";
+import { useLibrary } from "./LibraryContext";
 import type { YouTubePlayerHandle } from "@/components/YouTubePlayer";
-import type { ResolvedStream, RepeatMode, StreamFormat, Track } from "@/lib/types";
+import type { QueueSource, ResolvedStream, RepeatMode, StreamFormat, Track } from "@/lib/types";
 
 interface PlayerContextValue {
   mediaRef: React.RefObject<HTMLVideoElement>;
@@ -35,7 +36,9 @@ interface PlayerContextValue {
   duration: number;
   history: Track[];
   playTrack(track: Track, queue?: Track[]): void;
-  playQueue(tracks: Track[], startIndex?: number): void;
+  playQueue(tracks: Track[], startIndex?: number, source?: QueueSource | null): void;
+  playShuffled(tracks: Track[], source?: QueueSource | null): void;
+  playAt(queueIndex: number): void;
   playHistory(track: Track): void;
   toggle(): void;
   next(): void;
@@ -44,7 +47,7 @@ interface PlayerContextValue {
   setSpeed(v: number): void;
   setVolume(v: number): void;
   toggleMute(): void;
-  toggleShuffle(): void;
+  toggleShuffle(force?: boolean): void;
   cycleRepeat(): void;
   setAudioOnly(v: boolean): void;
   setExpanded(v: boolean): void;
@@ -79,18 +82,21 @@ function loadHistory(): Track[] {
 }
 
 export function PlayerProvider({ children }: { children: React.ReactNode }) {
+  const { playlists } = useLibrary();
   const mediaRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const embedRef = useRef<YouTubePlayerHandle>(null);
   const pendingPlayRef = useRef(false);
   const requestRef = useRef(0);
   const lastPositionSyncRef = useRef(0);
+  const preShuffleRef = useRef<Track[] | null>(null);
 
   const [current, setCurrent] = useState<Track | null>(null);
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
   const [embedVideoId, setEmbedVideoId] = useState<string | null>(null);
   const [embedStart, setEmbedStart] = useState(0);
   const [queue, setQueue] = useState<Track[]>([]);
+  const [queueSource, setQueueSource] = useState<QueueSource | null>(null);
   const [index, setIndex] = useState(-1);
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -148,6 +154,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       stopMedia();
       setError(null);
       setResolved(null);
+      setPosition(0);
+      setDuration(0);
 
       const videoId = youtubeVideoId(track.url);
       if (videoId) {
@@ -182,11 +190,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [stopMedia]
   );
 
-  const startTrack = useCallback(
-    (track: Track, q?: Track[], at?: number) => {
+  const beginQueue = useCallback(
+    (track: Track, list: Track[] | null, at: number | null, source: QueueSource | null) => {
       pendingPlayRef.current = true;
-      if (q) setQueue(q);
+      if (list) setQueue(list);
       if (at != null) setIndex(at);
+      setQueueSource(source);
       setCurrent(track);
       pushHistory(track);
       resolveCurrent(track);
@@ -194,22 +203,63 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [pushHistory, resolveCurrent]
   );
 
+  const startTrack = useCallback(
+    (track: Track, list?: Track[], at?: number, source: QueueSource | null = null, forceShuffle?: boolean) => {
+      if (!list) {
+        beginQueue(track, null, at ?? null, source);
+        return;
+      }
+      const shouldShuffle = forceShuffle ?? shuffle;
+      if (shouldShuffle) {
+        if (list.length > 1) {
+          preShuffleRef.current = list;
+          const rest = shuffleArray(list.filter((t) => t.id !== track.id));
+          beginQueue(track, [track, ...rest], 0, source);
+          return;
+        }
+      }
+      beginQueue(track, list, at ?? 0, source);
+    },
+    [beginQueue, shuffle]
+  );
+
   const playTrack = useCallback(
     (track: Track, q?: Track[]) => {
       const list = q ?? [track];
-      const at = list.findIndex((t) => t.url === track.url);
+      const at = list.findIndex((t) => t.id === track.id);
       startTrack(track, list, at < 0 ? 0 : at);
     },
     [startTrack]
   );
 
   const playQueue = useCallback(
-    (tracks: Track[], startIndex = 0) => {
+    (tracks: Track[], startIndex = 0, source: QueueSource | null = null) => {
       if (!tracks.length) return;
       const i = Math.max(0, Math.min(startIndex, tracks.length - 1));
-      startTrack(tracks[i], tracks, i);
+      startTrack(tracks[i], tracks, i, source);
     },
     [startTrack]
+  );
+
+  const playShuffled = useCallback(
+    (tracks: Track[], source: QueueSource | null = null) => {
+      if (!tracks.length) return;
+      const first = tracks[Math.floor(Math.random() * tracks.length)];
+      setShuffle(true);
+      preShuffleRef.current = tracks;
+      const rest = shuffleArray(tracks.filter((t) => t.id !== first.id));
+      beginQueue(first, [first, ...rest], 0, source);
+    },
+    [beginQueue]
+  );
+
+  const playAt = useCallback(
+    (queueIndex: number) => {
+      const track = queue[queueIndex];
+      if (!track) return;
+      beginQueue(track, null, queueIndex, queueSource);
+    },
+    [queue, queueSource, beginQueue]
   );
 
   const playHistory = useCallback(
@@ -247,14 +297,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       if (!queue.length) return;
-      let nextIdx = index + dir;
-      if (nextIdx >= queue.length) nextIdx = repeat === "all" || !auto ? 0 : index;
+      const aligned = current ? queue.findIndex((t) => t.id === current.id) : -1;
+      const base = aligned >= 0 ? aligned : index;
+      let nextIdx = base + dir;
+      if (nextIdx >= queue.length) nextIdx = repeat === "all" || !auto ? 0 : base;
       if (nextIdx < 0) nextIdx = queue.length - 1;
-      if (nextIdx === index) {
+      if (nextIdx === base && queue.length === 1) {
         if (auto && repeat === "all") restart();
-        else if (auto) pauseCurrent();
+        else if (auto) setPlaying(false);
         return;
       }
+      if (nextIdx === base) return;
       const track = queue[nextIdx];
       pendingPlayRef.current = true;
       setCurrent(track);
@@ -262,7 +315,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       pushHistory(track);
       resolveCurrent(track);
     },
-    [queue, index, repeat, pushHistory, resolveCurrent, restart, pauseCurrent]
+    [queue, index, current, repeat, pushHistory, resolveCurrent, restart, pauseCurrent]
   );
 
   const next = useCallback(() => advance(1, false), [advance]);
@@ -385,19 +438,31 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     setLoading(false);
   }, []);
 
-  const toggleShuffle = useCallback(() => {
-    const turningOn = !shuffle;
-    if (turningOn && queue.length > 1) {
-      const cur = current;
-      const shuffled = shuffleArray(queue);
-      setQueue(shuffled);
-      if (cur) {
-        const i = shuffled.findIndex((t) => t.url === cur.url);
-        if (i >= 0) setIndex(i);
+  const toggleShuffle = useCallback(
+    () => {
+      const next = !shuffle;
+      if (next === shuffle) return;
+      if (next) {
+        preShuffleRef.current = queue;
+        if (queue.length > 1) {
+          const rest = shuffleArray(queue.filter((t) => t.id !== current?.id));
+          const newQueue = current && queue.some((t) => t.id === current.id) ? [current, ...rest] : rest;
+          setQueue(newQueue);
+          setIndex(newQueue.length ? 0 : -1);
+        }
+      } else {
+        const original = preShuffleRef.current;
+        preShuffleRef.current = null;
+        if (original && original.length) {
+          setQueue(original);
+          const i = current ? original.findIndex((t) => t.id === current.id) : -1;
+          setIndex(i >= 0 ? i : 0);
+        }
       }
-    }
-    setShuffle(turningOn);
-  }, [shuffle, queue, current]);
+      setShuffle(next);
+    },
+    [shuffle, queue, current]
+  );
 
   const cycleRepeat = useCallback(() => {
     setRepeat((r) => (r === "off" ? "all" : r === "all" ? "one" : "off"));
@@ -662,6 +727,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       history,
       playTrack,
       playQueue,
+      playShuffled,
+      playAt,
       playHistory,
       toggle,
       next,
@@ -708,6 +775,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       history,
       playTrack,
       playQueue,
+      playShuffled,
+      playAt,
       playHistory,
       toggle,
       next,
