@@ -14,10 +14,13 @@ interface PlayerContextValue {
   isEmbed: boolean;
   embedVideoId: string | null;
   embedStart: number;
+  /** Playlist nội bộ của YouTube: để nó tự chuyển bài / tự lặp khi chạy nền. */
+  ytRequest: { ids: string[]; index: number; start: number; key: number } | null;
   onEmbedReady(): void;
   onEmbedState(state: number): void;
   onEmbedProgress(time: number, duration: number): void;
   onEmbedError(message: string): void;
+  onEmbedVideoChange(videoId: string): void;
   current: Track | null;
   resolved: ResolvedStream | null;
   queue: Track[];
@@ -47,7 +50,7 @@ interface PlayerContextValue {
   setSpeed(v: number): void;
   setVolume(v: number): void;
   toggleMute(): void;
-  toggleShuffle(force?: boolean): void;
+  toggleShuffle(): void;
   cycleRepeat(): void;
   setAudioOnly(v: boolean): void;
   setExpanded(v: boolean): void;
@@ -90,11 +93,21 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const requestRef = useRef(0);
   const lastPositionSyncRef = useRef(0);
   const preShuffleRef = useRef<Track[] | null>(null);
+  /** Danh sách YouTube đang nạp vào player, dùng để quy đổi index khi quay lại app. */
+  const ytPoolRef = useRef<Track[]>([]);
+  const currentRef = useRef<Track | null>(null);
+  const queueRef = useRef<Track[]>([]);
+  /** Vị trí gần nhất của từng bài, để lưu đúng bài khi YouTube tự chuyển. */
+  const lastTickRef = useRef<{ id: string; seconds: number }>({ id: "", seconds: 0 });
 
   const [current, setCurrent] = useState<Track | null>(null);
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
   const [embedVideoId, setEmbedVideoId] = useState<string | null>(null);
   const [embedStart, setEmbedStart] = useState(0);
+  const [ytRequest, setYtRequest] = useState<{ ids: string[]; index: number; start: number; key: number } | null>(
+    null
+  );
+  const ytKeyRef = useRef(0);
   const [queue, setQueue] = useState<Track[]>([]);
   const [queueSource, setQueueSource] = useState<QueueSource | null>(null);
   const [index, setIndex] = useState(-1);
@@ -111,6 +124,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
   const [history, setHistory] = useState<Track[]>([]);
+
+  currentRef.current = current;
+  queueRef.current = queue;
 
   useEffect(() => {
     setVolumeState(loadNumber(VOLUME_KEY, 1));
@@ -147,8 +163,29 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const buildYtRequest = useCallback(
+    (track: Track, start: number, list?: Track[] | null) => {
+      const pool = (list && list.length ? list : queue).filter((t) => youtubeVideoId(t.url));
+      if (!pool.length) return null;
+      ytPoolRef.current = pool;
+      let idx = pool.findIndex((t) => t.id === track.id);
+      if (idx < 0) {
+        const vid = youtubeVideoId(track.url);
+        idx = pool.findIndex((t) => youtubeVideoId(t.url) === vid);
+      }
+      if (idx < 0) idx = 0;
+      return {
+        ids: pool.map((t) => youtubeVideoId(t.url) as string),
+        index: idx,
+        start,
+        key: ++ytKeyRef.current,
+      };
+    },
+    [queue]
+  );
+
   const resolveCurrent = useCallback(
-    (track: Track) => {
+    (track: Track, list?: Track[] | null) => {
       const reqId = ++requestRef.current;
 
       stopMedia();
@@ -160,8 +197,17 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const videoId = youtubeVideoId(track.url);
       if (videoId) {
         const saved = loadNumber(posKey(track.id), 0);
+        const start = saved > 5 ? saved : 0;
         setEmbedVideoId(videoId);
-        setEmbedStart(saved > 5 ? saved : 0);
+        setEmbedStart(start);
+        /* Giao cả hàng đợi cho YouTube. Khi khoá máy, chính YouTube chuyển bài
+           và lặp lại — không phụ thuộc JS của mình còn chạy hay không. */
+        if (repeat === "one") {
+          ytPoolRef.current = [track];
+          setYtRequest({ ids: [videoId], index: 0, start, key: ++ytKeyRef.current });
+        } else {
+          setYtRequest(buildYtRequest(track, start, list));
+        }
         setLoading(false);
         pendingPlayRef.current = true;
         return;
@@ -187,7 +233,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           setLoading(false);
         });
     },
-    [stopMedia]
+    [stopMedia, buildYtRequest, repeat]
   );
 
   const beginQueue = useCallback(
@@ -198,7 +244,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setQueueSource(source);
       setCurrent(track);
       pushHistory(track);
-      resolveCurrent(track);
+      resolveCurrent(track, list);
     },
     [pushHistory, resolveCurrent]
   );
@@ -318,8 +364,31 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [queue, index, current, repeat, pushHistory, resolveCurrent, restart, pauseCurrent]
   );
 
-  const next = useCallback(() => advance(1, false), [advance]);
-  const prev = useCallback(() => advance(-1, false), [advance]);
+  const next = useCallback(() => {
+    if (embedVideoId) {
+      const allYoutube = queue.length > 0 && queue.every((t) => !!youtubeVideoId(t.url));
+      if (repeat === "one" || !allYoutube) {
+        advance(1, false);
+        return;
+      }
+      embedRef.current?.next();
+      return;
+    }
+    advance(1, false);
+  }, [advance, embedVideoId, repeat, queue]);
+
+  const prev = useCallback(() => {
+    if (embedVideoId) {
+      const allYoutube = queue.length > 0 && queue.every((t) => !!youtubeVideoId(t.url));
+      if (repeat === "one" || !allYoutube) {
+        advance(-1, false);
+        return;
+      }
+      embedRef.current?.previous();
+      return;
+    }
+    advance(-1, false);
+  }, [advance, embedVideoId, repeat, queue]);
 
   const toggle = useCallback(() => {
     if (!current) return;
@@ -419,19 +488,35 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     }
   }, [volume, muted, speed]);
 
-  const onEmbedState = useCallback(
-    (state: number) => {
-      if (state === 1) setPlaying(true);
-      else if (state === 0 || state === 2) setPlaying(false);
-      if (state === 0) advance(1, true);
-    },
-    [advance]
-  );
+  /* YouTube tự chuyển bài trong playlist nội bộ. Chỉ cần đồng bộ lại UI,
+     vì khi chạy nền chính player của YouTube mới là thứ giữ nhạc liên tục. */
+  const onEmbedState = useCallback((state: number) => {
+    if (state === 1) setPlaying(true);
+    else if (state === 0 || state === 2) setPlaying(false);
+  }, []);
 
   const onEmbedProgress = useCallback((time: number, dur: number) => {
     setPosition(time);
     if (dur && isFinite(dur)) setDuration(dur);
+    const id = currentRef.current?.id;
+    if (id && time > 3) lastTickRef.current = { id, seconds: time };
   }, []);
+
+  const onEmbedVideoChange = useCallback(
+    (videoId: string) => {
+      const prev = currentRef.current;
+      if (!prev || youtubeVideoId(prev.url) === videoId) return;
+      const list = queueRef.current;
+      const i = list.findIndex((t) => youtubeVideoId(t.url) === videoId);
+      if (i < 0) return;
+      const track = list[i];
+      setIndex(i);
+      setCurrent(track);
+      pushHistory(track);
+      setPosition(0);
+    },
+    [pushHistory]
+  );
 
   const onEmbedError = useCallback((message: string) => {
     setError(message);
@@ -442,6 +527,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     () => {
       const next = !shuffle;
       if (next === shuffle) return;
+
+      const rebuildEmbed = (target: Track[]) => {
+        if (!embedVideoId || !current) return;
+        const start = embedRef.current?.getCurrentTime() ?? 0;
+        const req = buildYtRequest(current, start, target);
+        if (req) setYtRequest(req);
+      };
+
       if (next) {
         preShuffleRef.current = queue;
         if (queue.length > 1) {
@@ -449,6 +542,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           const newQueue = current && queue.some((t) => t.id === current.id) ? [current, ...rest] : rest;
           setQueue(newQueue);
           setIndex(newQueue.length ? 0 : -1);
+          rebuildEmbed(newQueue);
         }
       } else {
         const original = preShuffleRef.current;
@@ -457,12 +551,30 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
           setQueue(original);
           const i = current ? original.findIndex((t) => t.id === current.id) : -1;
           setIndex(i >= 0 ? i : 0);
+          rebuildEmbed(original);
         }
       }
       setShuffle(next);
     },
-    [shuffle, queue, current]
+    [shuffle, queue, current, embedVideoId, buildYtRequest]
   );
+
+  /* Đổi chế độ lặp: đổi "playlist" nạp vào YouTube để nó tự lặp đúng cách. */
+  const repeatRef = useRef(repeat);
+  useEffect(() => {
+    const was = repeatRef.current;
+    repeatRef.current = repeat;
+    if (!embedVideoId || !current) return;
+    if (repeat !== "one" && was !== "one") return;
+    const start = embedRef.current?.getCurrentTime() ?? 0;
+    if (repeat === "one") {
+      ytPoolRef.current = [current];
+      setYtRequest({ ids: [embedVideoId], index: 0, start, key: ++ytKeyRef.current });
+    } else {
+      setYtRequest(buildYtRequest(current, start));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repeat]);
 
   const cycleRepeat = useCallback(() => {
     setRepeat((r) => (r === "off" ? "all" : r === "all" ? "one" : "off"));
@@ -559,6 +671,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (!isActive(el)) return;
       setPosition(el.currentTime);
       if (el.duration && isFinite(el.duration)) setDuration(el.duration);
+      const id = currentRef.current?.id;
+      if (id && el.currentTime > 3) lastTickRef.current = { id, seconds: el.currentTime };
     };
     const onMeta = (event: Event) => {
       const el = event.currentTarget as HTMLMediaElement;
@@ -599,27 +713,149 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     };
   }, [advance, current, getActiveMedia]);
 
-  /* Persist playback position */
+  /* Persist playback position (theo đúng bài, kể cả khi YouTube tự chuyển bài) */
   useEffect(() => {
     if (!current) return;
     const id = current.id;
     const save = () => {
-      const seconds = embedVideoId
-        ? embedRef.current?.getCurrentTime() ?? 0
-        : getActiveMedia()?.currentTime ?? 0;
-      if (seconds > 3) window.localStorage.setItem(posKey(id), String(Math.floor(seconds)));
+      const tick = lastTickRef.current;
+      if (tick.id !== id || tick.seconds <= 3) return;
+      try {
+        window.localStorage.setItem(posKey(id), String(Math.floor(tick.seconds)));
+      } catch {
+        /* ignore */
+      }
     };
     const t = setInterval(save, 5000);
     return () => {
       clearInterval(t);
       save();
     };
-  }, [current, embedVideoId, getActiveMedia]);
+  }, [current]);
 
-  /* Media Session (lock screen / control center) */
+  /* Khi quay lại tab: YouTube có thể đã tự chuyển bài trong lúc chạy nền.
+     Đọc lại index thật từ player để UI khớp (JS có thể đã bị treo trước đó). */
+  const syncFromEmbed = useCallback(() => {
+    if (!embedVideoId) return;
+    const yt = embedRef.current;
+    if (!yt) return;
+    const i = yt.getIndex();
+    if (i < 0) return;
+    const track = ytPoolRef.current[i];
+    if (track && currentRef.current?.id !== track.id) {
+      const qi = queueRef.current.findIndex((t) => t.id === track.id);
+      if (qi >= 0) setIndex(qi);
+      setCurrent(track);
+      pushHistory(track);
+    }
+    const t = yt.getCurrentTime();
+    if (t > 0) {
+      setPosition(t);
+      const id = ytPoolRef.current[i]?.id;
+      if (id) lastTickRef.current = { id, seconds: t };
+    }
+  }, [embedVideoId, pushHistory]);
+
   useEffect(() => {
-    if (typeof navigator === "undefined" || !("mediaSession" in navigator) || !current) return;
+    if (typeof document === "undefined") return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") syncFromEmbed();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [syncFromEmbed]);
+
+  /* Media Session (lock screen / control center)
+     Đăng ký handler một lần, đọc giá trị mới nhất qua ref để không bị
+     tháo/gắn lại mỗi lần timeupdate. */
+  const msHandlersRef = useRef({ prev, next, seek, position, embedVideoId, getActiveMedia });
+  msHandlersRef.current = { prev, next, seek, position, embedVideoId, getActiveMedia };
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
     const ms = navigator.mediaSession;
+
+    const play = () => {
+      const h = msHandlersRef.current;
+      if (h.embedVideoId) {
+        embedRef.current?.play();
+        return;
+      }
+      const el = h.getActiveMedia();
+      if (el) void el.play().catch((e: Error) => setError(e.message));
+    };
+    const pause = () => {
+      const h = msHandlersRef.current;
+      if (h.embedVideoId) {
+        embedRef.current?.pause();
+        return;
+      }
+      h.getActiveMedia()?.pause();
+    };
+    const previous = () => {
+      const h = msHandlersRef.current;
+      if (h.position > 3) {
+        h.seek(0);
+        return;
+      }
+      h.prev();
+    };
+    const nextTrack = () => msHandlersRef.current.next();
+    const backward = (d: MediaSessionActionDetails) =>
+      msHandlersRef.current.seek(Math.max(0, msHandlersRef.current.position - (d.seekOffset || 10)));
+    const forward = (d: MediaSessionActionDetails) =>
+      msHandlersRef.current.seek(msHandlersRef.current.position + (d.seekOffset || 10));
+    const seekTo = (d: MediaSessionActionDetails) => {
+      if (d.seekTime != null) msHandlersRef.current.seek(d.seekTime);
+    };
+
+    try {
+      ms.setActionHandler("play", play);
+      ms.setActionHandler("pause", pause);
+      ms.setActionHandler("stop", pause);
+      ms.setActionHandler("previoustrack", previous);
+      ms.setActionHandler("nexttrack", nextTrack);
+      ms.setActionHandler("seekbackward", backward);
+      ms.setActionHandler("seekforward", forward);
+      ms.setActionHandler("seekto", seekTo);
+    } catch {
+      /* unsupported action */
+    }
+
+    return () => {
+      const actions = [
+        "play",
+        "pause",
+        "stop",
+        "previoustrack",
+        "nexttrack",
+        "seekbackward",
+        "seekforward",
+        "seekto",
+      ] as const;
+      for (const action of actions) {
+        try {
+          ms.setActionHandler(action, null);
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+  }, []);
+
+  /* Ảnh bìa / tiêu đề chỉ đổi khi đổi bài. */
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("mediaSession" in navigator)) return;
+    const ms = navigator.mediaSession;
+    if (!current) {
+      try {
+        ms.metadata = null;
+        ms.playbackState = "none";
+      } catch {
+        /* ignore */
+      }
+      return;
+    }
     try {
       ms.metadata = new MediaMetadata({
         title: current.title,
@@ -627,45 +863,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         album: "SyncTune",
         artwork: current.thumbnail ? [{ src: current.thumbnail, sizes: "480x360", type: "image/jpeg" }] : [],
       });
-      ms.setActionHandler("play", () => {
-        if (embedVideoId) {
-          embedRef.current?.play();
-          return;
-        }
-        const el = getActiveMedia();
-        if (el) void el.play().catch((e) => setError(e.message));
-      });
-      ms.setActionHandler("pause", () => {
-        if (embedVideoId) {
-          embedRef.current?.pause();
-          return;
-        }
-        getActiveMedia()?.pause();
-      });
-      ms.setActionHandler("previoustrack", () => prev());
-      ms.setActionHandler("nexttrack", () => next());
-      ms.setActionHandler("seekbackward", (d) => seek(Math.max(0, position - (d.seekOffset || 10))));
-      ms.setActionHandler("seekforward", (d) => seek(position + (d.seekOffset || 10)));
-      ms.setActionHandler("seekto", (d) => {
-        if (d.seekTime != null) seek(d.seekTime);
-      });
     } catch {
-      /* unsupported action */
+      /* ignore */
     }
-    return () => {
-      try {
-        ms.setActionHandler("play", null);
-        ms.setActionHandler("pause", null);
-        ms.setActionHandler("previoustrack", null);
-        ms.setActionHandler("nexttrack", null);
-        ms.setActionHandler("seekbackward", null);
-        ms.setActionHandler("seekforward", null);
-        ms.setActionHandler("seekto", null);
-      } catch {
-        /* ignore */
-      }
-    };
-  }, [current, position, next, prev, seek, embedVideoId, getActiveMedia]);
+  }, [current]);
 
   /* Keep the OS media session state in sync (lock screen / control center) */
   useEffect(() => {
@@ -704,10 +905,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       isEmbed,
       embedVideoId,
       embedStart,
+      ytRequest,
       onEmbedReady,
       onEmbedState,
       onEmbedProgress,
       onEmbedError,
+      onEmbedVideoChange,
       current,
       resolved,
       queue,
@@ -751,11 +954,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     [
       embedVideoId,
       embedStart,
+      ytRequest,
       isEmbed,
       onEmbedReady,
       onEmbedState,
       onEmbedProgress,
       onEmbedError,
+      onEmbedVideoChange,
       current,
       resolved,
       queue,

@@ -30,10 +30,12 @@ export function FullPlayer() {
     isEmbed,
     embedVideoId,
     embedStart,
+    ytRequest,
     onEmbedReady,
     onEmbedState,
     onEmbedProgress,
     onEmbedError,
+    onEmbedVideoChange,
     current,
     resolved,
     expanded,
@@ -105,6 +107,10 @@ export function FullPlayer() {
               ref={embedRef}
               videoId={embedVideoId}
               startSeconds={embedStart}
+              playlist={ytRequest?.ids}
+              playlistIndex={ytRequest?.index ?? 0}
+              requestKey={ytRequest?.key ?? 0}
+              loop={repeat !== "off"}
               className={cn(
                 "absolute inset-0 h-full w-full",
                 audioOnly && "pointer-events-none opacity-0"
@@ -113,6 +119,7 @@ export function FullPlayer() {
               onState={onEmbedState}
               onProgress={onEmbedProgress}
               onError={onEmbedError}
+              onVideoChange={onEmbedVideoChange}
             />
           ) : null}
           {showArtwork ? (

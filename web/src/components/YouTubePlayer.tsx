@@ -14,6 +14,14 @@ interface YTPlayer {
   getDuration(): number;
   getPlayerState(): number;
   loadVideoById(opts: { videoId: string; startSeconds?: number }): void;
+  loadPlaylist(opts: { playlist: string[]; index?: number; startSeconds?: number }): void;
+  setLoop(loop: boolean): void;
+  nextVideo(): void;
+  previousVideo(): void;
+  playVideoAt(index: number): void;
+  getPlaylist(): string[] | undefined;
+  getPlaylistIndex(): number;
+  getVideoData(): { video_id?: string; title?: string; author?: string } | undefined;
   destroy(): void;
 }
 
@@ -51,16 +59,37 @@ export interface YouTubePlayerHandle {
   getCurrentTime(): number;
   getDuration(): number;
   getState(): number;
+  next(): void;
+  previous(): void;
+  playAt(index: number): void;
+  getIndex(): number;
+  setLoop(loop: boolean): void;
 }
 
 interface Props {
   videoId: string | null;
   startSeconds?: number;
+  /** Danh sách video để YouTube tự chuyển bài / tự lặp kể cả khi JS bị treo. */
+  playlist?: string[];
+  playlistIndex?: number;
+  /** Tăng số này để buộc nạp lại playlist (đổi thứ tự, đổi bài thủ công). */
+  requestKey?: number;
+  /** Lặp toàn bộ playlist (repeat all/one). */
+  loop?: boolean;
   className?: string;
   onReady?: () => void;
   onState?: (state: number) => void;
   onProgress?: (time: number, duration: number) => void;
   onError?: (message: string) => void;
+  /** Bắn khi YouTube tự chuyển sang video khác (kể cả khi chạy nền). */
+  onVideoChange?: (videoId: string) => void;
+}
+
+interface LoadRequest {
+  videoId: string;
+  start: number;
+  playlist?: string[];
+  index: number;
 }
 
 let apiPromise: Promise<YTNamespace> | null = null;
@@ -92,18 +121,46 @@ function errorMessage(code: number): string {
 }
 
 export const YouTubePlayer = forwardRef<YouTubePlayerHandle, Props>(function YouTubePlayer(
-  { videoId, startSeconds = 0, className, onReady, onState, onProgress, onError },
+  {
+    videoId,
+    startSeconds = 0,
+    playlist,
+    playlistIndex = 0,
+    requestKey = 0,
+    loop = false,
+    className,
+    onReady,
+    onState,
+    onProgress,
+    onError,
+    onVideoChange,
+  },
   ref
 ) {
   const holderRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YTPlayer | null>(null);
   const readyRef = useRef(false);
-  const pendingRef = useRef<{ videoId: string; start: number } | null>(null);
-  const startRef = useRef(startSeconds);
-  startRef.current = startSeconds;
+  const pendingRef = useRef<LoadRequest | null>(null);
+  const loopRef = useRef(loop);
+  loopRef.current = loop;
 
-  const cbRef = useRef({ onReady, onState, onProgress, onError });
-  cbRef.current = { onReady, onState, onProgress, onError };
+  const cbRef = useRef({ onReady, onState, onProgress, onError, onVideoChange });
+  cbRef.current = { onReady, onState, onProgress, onError, onVideoChange };
+
+  const applyRequest = (req: LoadRequest) => {
+    const player = playerRef.current;
+    if (!player) return;
+    try {
+      if (req.playlist && req.playlist.length) {
+        player.loadPlaylist({ playlist: req.playlist, index: req.index, startSeconds: req.start });
+      } else if (req.videoId) {
+        player.loadVideoById({ videoId: req.videoId, startSeconds: req.start });
+      }
+      player.setLoop(!!loopRef.current);
+    } catch {
+      /* player not ready */
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -129,14 +186,29 @@ export const YouTubePlayer = forwardRef<YouTubePlayerHandle, Props>(function You
             onReady: () => {
               readyRef.current = true;
               playerRef.current = player;
+              try {
+                player.setLoop(!!loopRef.current);
+              } catch {
+                /* ignore */
+              }
               const pending = pendingRef.current;
               if (pending) {
                 pendingRef.current = null;
-                player.loadVideoById({ videoId: pending.videoId, startSeconds: pending.start });
+                applyRequest(pending);
               }
               cbRef.current.onReady?.();
             },
-            onStateChange: (event: { data: number }) => cbRef.current.onState?.(event.data),
+            onStateChange: (event: { data: number }) => {
+              cbRef.current.onState?.(event.data);
+              if (event.data === 1) {
+                try {
+                  const data = player.getVideoData?.();
+                  if (data?.video_id) cbRef.current.onVideoChange?.(data.video_id);
+                } catch {
+                  /* player not ready */
+                }
+              }
+            },
             onError: (event: { data: number }) => cbRef.current.onError?.(errorMessage(event.data)),
           },
         });
@@ -155,17 +227,32 @@ export const YouTubePlayer = forwardRef<YouTubePlayerHandle, Props>(function You
       playerRef.current = null;
       holderRef.current?.replaceChildren();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* Chỉ nạp lại khi người dùng chủ động đổi bài / đổi thứ tự (requestKey).
+     Khi YouTube tự chuyển bài, requestKey không đổi nên không bị nạp lại. */
   useEffect(() => {
-    if (!videoId) return;
-    const request = { videoId, start: Math.max(0, startRef.current) };
-    if (readyRef.current && playerRef.current) {
-      playerRef.current.loadVideoById(request);
-    } else {
-      pendingRef.current = request;
+    const firstId = videoId || (playlist && playlist.length ? playlist[playlistIndex] : null);
+    if (!firstId) return;
+    const req: LoadRequest = {
+      videoId: firstId,
+      start: Math.max(0, startSeconds || 0),
+      playlist: playlist && playlist.length ? playlist : undefined,
+      index: playlistIndex,
+    };
+    if (readyRef.current && playerRef.current) applyRequest(req);
+    else pendingRef.current = req;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoId, requestKey]);
+
+  useEffect(() => {
+    try {
+      playerRef.current?.setLoop(!!loop);
+    } catch {
+      /* ignore */
     }
-  }, [videoId]);
+  }, [loop]);
 
   useEffect(() => {
     const id = window.setInterval(() => {
@@ -197,6 +284,41 @@ export const YouTubePlayer = forwardRef<YouTubePlayerHandle, Props>(function You
       getCurrentTime: () => playerRef.current?.getCurrentTime() || 0,
       getDuration: () => playerRef.current?.getDuration() || 0,
       getState: () => playerRef.current?.getPlayerState() ?? -1,
+      next: () => {
+        try {
+          playerRef.current?.nextVideo();
+        } catch {
+          /* ignore */
+        }
+      },
+      previous: () => {
+        try {
+          playerRef.current?.previousVideo();
+        } catch {
+          /* ignore */
+        }
+      },
+      playAt: (index: number) => {
+        try {
+          playerRef.current?.playVideoAt(index);
+        } catch {
+          /* ignore */
+        }
+      },
+      getIndex: () => {
+        try {
+          return playerRef.current?.getPlaylistIndex() ?? -1;
+        } catch {
+          return -1;
+        }
+      },
+      setLoop: (value: boolean) => {
+        try {
+          playerRef.current?.setLoop(value);
+        } catch {
+          /* ignore */
+        }
+      },
     }),
     []
   );
