@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AuthProvider } from "@/context/AuthContext";
 import { LibraryProvider } from "@/context/LibraryContext";
 import { PlayerProvider, usePlayer } from "@/context/PlayerContext";
@@ -48,11 +48,44 @@ function MediaDiagnostics() {
   const { audioRef, embedRef, isEmbed, playing, current, ytRequest, sleepRemaining } = usePlayer();
   const [enabled, setEnabled] = useState(false);
   const [snapshot, setSnapshot] = useState("");
+  const [log, setLog] = useState<string[]>([]);
+
+  const logEvent = useCallback((message: string) => {
+    const ts = new Date().toTimeString().slice(0, 8);
+    setLog((prev) => [...prev.slice(-5), `${ts} ${message}`]);
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
     if (new URLSearchParams(window.location.search).get("diag") !== "1") return;
     setEnabled(true);
+  }, []);
+
+  useEffect(() => {
+    if (!enabled) return;
+    logEvent(`playing=${playing ? 1 : 0}`);
+  }, [playing, enabled, logEvent]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    logEvent(`path=${isEmbed ? "yt" : "audio"}`);
+  }, [isEmbed, enabled, logEvent]);
+
+  useEffect(() => {
+    if (!enabled) return;
+    logEvent(`track=${(current?.title || "-").slice(0, 20)}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current?.id, enabled, logEvent]);
+
+  useEffect(() => {
+    if (!enabled || typeof document === "undefined") return;
+    const onVis = () => logEvent(`vis=${document.visibilityState}`);
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [enabled, logEvent]);
+
+  useEffect(() => {
+    if (!enabled) return;
     const id = window.setInterval(() => {
       const el = audioRef.current;
       let media: string;
@@ -95,7 +128,8 @@ function MediaDiagnostics() {
         wordBreak: "break-all",
       }}
     >
-      {snapshot}
+      <div>{snapshot}</div>
+      {log.length ? <div style={{ color: "#6cf" }}>{log.join(" · ")}</div> : null}
     </div>
   );
 }
