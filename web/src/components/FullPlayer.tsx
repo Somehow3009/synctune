@@ -6,6 +6,7 @@ import { cn, formatTime } from "@/lib/utils";
 import {
   ChevronDown,
   Headphones,
+  Moon,
   Next,
   Pause,
   Play,
@@ -22,6 +23,7 @@ import { QueuePanel } from "./QueuePanel";
 import { YouTubePlayer } from "./YouTubePlayer";
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
+const SLEEP_OPTIONS = [5, 15, 30, 45, 60];
 
 export function FullPlayer() {
   const {
@@ -61,10 +63,14 @@ export function FullPlayer() {
     setAudioOnly,
     loading,
     error,
+    sleepRemaining,
+    sleepActive,
+    setSleepTimer,
   } = usePlayer();
 
   const [queueOpen, setQueueOpen] = useState(false);
   const [speedOpen, setSpeedOpen] = useState(false);
+  const [sleepOpen, setSleepOpen] = useState(false);
 
   useEffect(() => {
     if (!expanded) setSpeedOpen(false);
@@ -111,6 +117,7 @@ export function FullPlayer() {
               playlistIndex={ytRequest?.index ?? 0}
               requestKey={ytRequest?.key ?? 0}
               loop={repeat !== "off"}
+              autoPlay={ytRequest?.autoPlay ?? true}
               className={cn(
                 "absolute inset-0 h-full w-full",
                 audioOnly && "pointer-events-none opacity-0"
@@ -158,8 +165,8 @@ export function FullPlayer() {
           <p className="truncate text-sm text-white/60">{current?.uploader || "SyncTune"}</p>
           {isEmbed && audioOnly ? (
             <p className="mx-auto mt-1 max-w-md text-xs text-amber-300/80">
-              YouTube không cho phát nền trên iPhone: nhạc sẽ dừng khi khoá màn hình hoặc chuyển app. Muốn nghe nền,
-              hãy dùng nguồn có link audio trực tiếp.
+              Đang phát qua YouTube: việc chuyển bài và lặp lại do chính YouTube đảm nhận, nên trên Brave vẫn
+              chạy khi khoá màn hình. Nếu nhạc dừng, mở lại app để tiếp tục.
             </p>
           ) : null}
         </div>
@@ -209,7 +216,7 @@ export function FullPlayer() {
           </button>
         </div>
 
-        <div className="mt-4 flex items-center justify-center gap-3">
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
           <button
             onClick={() => setAudioOnly(!audioOnly)}
             className={cn("st-chip !bg-white/10 !text-white/80", audioOnly && "!bg-brand-600/30 !text-brand-200")}
@@ -240,6 +247,44 @@ export function FullPlayer() {
                     {s}x
                   </button>
                 ))}
+              </div>
+            ) : null}
+          </div>
+
+          <div className="relative">
+            <button
+              onClick={() => setSleepOpen((s) => !s)}
+              className={cn("st-chip !bg-white/10 !text-white/80", sleepActive && "!bg-brand-600/30 !text-brand-200")}
+              title="Hẹn giờ ngủ"
+            >
+              <Moon width={14} height={14} />
+              {sleepActive ? `${Math.max(1, Math.ceil(sleepRemaining / 60))} phút` : "Hẹn giờ"}
+            </button>
+            {sleepOpen ? (
+              <div className="absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2 rounded-xl border border-white/10 bg-[#16161f] p-1 shadow-xl">
+                {SLEEP_OPTIONS.map((m) => (
+                  <button
+                    key={m}
+                    onClick={() => {
+                      setSleepTimer(m);
+                      setSleepOpen(false);
+                    }}
+                    className="block w-24 rounded-lg px-3 py-1.5 text-center text-sm hover:bg-white/10"
+                  >
+                    {m} phút
+                  </button>
+                ))}
+                {sleepActive ? (
+                  <button
+                    onClick={() => {
+                      setSleepTimer(null);
+                      setSleepOpen(false);
+                    }}
+                    className="block w-24 rounded-lg px-3 py-1.5 text-center text-sm text-red-300 hover:bg-white/10"
+                  >
+                    Tắt
+                  </button>
+                ) : null}
               </div>
             ) : null}
           </div>

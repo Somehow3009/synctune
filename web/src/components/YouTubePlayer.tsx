@@ -14,7 +14,9 @@ interface YTPlayer {
   getDuration(): number;
   getPlayerState(): number;
   loadVideoById(opts: { videoId: string; startSeconds?: number }): void;
+  cueVideoById(opts: { videoId: string; startSeconds?: number }): void;
   loadPlaylist(opts: { playlist: string[]; index?: number; startSeconds?: number }): void;
+  cuePlaylist(opts: { playlist: string[]; index?: number; startSeconds?: number }): void;
   setLoop(loop: boolean): void;
   nextVideo(): void;
   previousVideo(): void;
@@ -76,6 +78,8 @@ interface Props {
   requestKey?: number;
   /** Lặp toàn bộ playlist (repeat all/one). */
   loop?: boolean;
+  /** false = chỉ nạp bài (cue), chờ người dùng bấm phát. Dùng khi khôi phục phiên. */
+  autoPlay?: boolean;
   className?: string;
   onReady?: () => void;
   onState?: (state: number) => void;
@@ -90,6 +94,7 @@ interface LoadRequest {
   start: number;
   playlist?: string[];
   index: number;
+  autoPlay: boolean;
 }
 
 let apiPromise: Promise<YTNamespace> | null = null;
@@ -128,6 +133,7 @@ export const YouTubePlayer = forwardRef<YouTubePlayerHandle, Props>(function You
     playlistIndex = 0,
     requestKey = 0,
     loop = false,
+    autoPlay = true,
     className,
     onReady,
     onState,
@@ -152,9 +158,17 @@ export const YouTubePlayer = forwardRef<YouTubePlayerHandle, Props>(function You
     if (!player) return;
     try {
       if (req.playlist && req.playlist.length) {
-        player.loadPlaylist({ playlist: req.playlist, index: req.index, startSeconds: req.start });
+        if (req.autoPlay) {
+          player.loadPlaylist({ playlist: req.playlist, index: req.index, startSeconds: req.start });
+        } else {
+          player.cuePlaylist({ playlist: req.playlist, index: req.index, startSeconds: req.start });
+        }
       } else if (req.videoId) {
-        player.loadVideoById({ videoId: req.videoId, startSeconds: req.start });
+        if (req.autoPlay) {
+          player.loadVideoById({ videoId: req.videoId, startSeconds: req.start });
+        } else {
+          player.cueVideoById({ videoId: req.videoId, startSeconds: req.start });
+        }
       }
       player.setLoop(!!loopRef.current);
     } catch {
@@ -240,6 +254,7 @@ export const YouTubePlayer = forwardRef<YouTubePlayerHandle, Props>(function You
       start: Math.max(0, startSeconds || 0),
       playlist: playlist && playlist.length ? playlist : undefined,
       index: playlistIndex,
+      autoPlay,
     };
     if (readyRef.current && playerRef.current) applyRequest(req);
     else pendingRef.current = req;

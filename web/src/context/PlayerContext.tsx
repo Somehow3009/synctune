@@ -15,7 +15,13 @@ interface PlayerContextValue {
   embedVideoId: string | null;
   embedStart: number;
   /** Playlist nội bộ của YouTube: để nó tự chuyển bài / tự lặp khi chạy nền. */
-  ytRequest: { ids: string[]; index: number; start: number; key: number } | null;
+  ytRequest: {
+    ids: string[];
+    index: number;
+    start: number;
+    key: number;
+    autoPlay: boolean;
+  } | null;
   onEmbedReady(): void;
   onEmbedState(state: number): void;
   onEmbedProgress(time: number, duration: number): void;
@@ -38,6 +44,10 @@ interface PlayerContextValue {
   position: number;
   duration: number;
   history: Track[];
+  /** Số giây còn lại của hẹn giờ ngủ; 0 = đang tắt. */
+  sleepRemaining: number;
+  sleepActive: boolean;
+  setSleepTimer(minutes: number | null): void;
   playTrack(track: Track, queue?: Track[]): void;
   playQueue(tracks: Track[], startIndex?: number, source?: QueueSource | null): void;
   playShuffled(tracks: Track[], source?: QueueSource | null): void;
@@ -66,6 +76,7 @@ const PlayerContext = createContext<PlayerContextValue | null>(null);
 
 const VOLUME_KEY = "synctune:volume";
 const HISTORY_KEY = "synctune:history";
+const SESSION_KEY = "synctune:session";
 const posKey = (id: string) => `synctune:pos:${id}`;
 
 function loadNumber(key: string, fallback: number): number {
@@ -99,14 +110,25 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const queueRef = useRef<Track[]>([]);
   /** Vị trí gần nhất của từng bài, để lưu đúng bài khi YouTube tự chuyển. */
   const lastTickRef = useRef<{ id: string; seconds: number }>({ id: "", seconds: 0 });
+  const volumeRef = useRef(1);
+  const mutedRef = useRef(false);
+  const sleepFadeRef = useRef(false);
+  const preSleepVolumeRef = useRef(1);
+  /* Tick hẹn giờ, được gọi thêm từ sự kiện tiến trình phát để vẫn chạy khi
+     màn hình khoá (iOS bóp nghẹt setInterval nhưng media vẫn cập nhật). */
+  const sleepTickRef = useRef<(() => void) | null>(null);
 
   const [current, setCurrent] = useState<Track | null>(null);
   const [resolved, setResolved] = useState<ResolvedStream | null>(null);
   const [embedVideoId, setEmbedVideoId] = useState<string | null>(null);
   const [embedStart, setEmbedStart] = useState(0);
-  const [ytRequest, setYtRequest] = useState<{ ids: string[]; index: number; start: number; key: number } | null>(
-    null
-  );
+  const [ytRequest, setYtRequest] = useState<{
+    ids: string[];
+    index: number;
+    start: number;
+    key: number;
+    autoPlay: boolean;
+  } | null>(null);
   const ytKeyRef = useRef(0);
   const [queue, setQueue] = useState<Track[]>([]);
   const [queueSource, setQueueSource] = useState<QueueSource | null>(null);
@@ -124,9 +146,13 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const [position, setPosition] = useState(0);
   const [duration, setDuration] = useState(0);
   const [history, setHistory] = useState<Track[]>([]);
+  const [sleepEndsAt, setSleepEndsAt] = useState<number | null>(null);
+  const [sleepRemaining, setSleepRemaining] = useState(0);
 
   currentRef.current = current;
   queueRef.current = queue;
+  volumeRef.current = volume;
+  mutedRef.current = muted;
 
   useEffect(() => {
     setVolumeState(loadNumber(VOLUME_KEY, 1));
@@ -164,7 +190,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const buildYtRequest = useCallback(
-    (track: Track, start: number, list?: Track[] | null) => {
+    (track: Track, start: number, list?: Track[] | null, autoPlay = true) => {
       const pool = (list && list.length ? list : queue).filter((t) => youtubeVideoId(t.url));
       if (!pool.length) return null;
       ytPoolRef.current = pool;
@@ -179,13 +205,14 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         index: idx,
         start,
         key: ++ytKeyRef.current,
+        autoPlay,
       };
     },
     [queue]
   );
 
   const resolveCurrent = useCallback(
-    (track: Track, list?: Track[] | null) => {
+    (track: Track, list?: Track[] | null, autoPlay = true) => {
       const reqId = ++requestRef.current;
 
       stopMedia();
@@ -204,12 +231,12 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
            và lặp lại — không phụ thuộc JS của mình còn chạy hay không. */
         if (repeat === "one") {
           ytPoolRef.current = [track];
-          setYtRequest({ ids: [videoId], index: 0, start, key: ++ytKeyRef.current });
+          setYtRequest({ ids: [videoId], index: 0, start, key: ++ytKeyRef.current, autoPlay });
         } else {
-          setYtRequest(buildYtRequest(track, start, list));
+          setYtRequest(buildYtRequest(track, start, list, autoPlay));
         }
         setLoading(false);
-        pendingPlayRef.current = true;
+        pendingPlayRef.current = autoPlay;
         return;
       }
 
@@ -476,6 +503,82 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
   const isEmbed = embedVideoId !== null;
 
+  /* ---- Hẹn giờ ngủ: giảm âm lượng dần trong 10 giây cuối rồi tạm dừng ---- */
+  const applyOutputVolume = useCallback(
+    (v: number) => {
+      const clamped = Math.max(0, Math.min(1, v));
+      if (embedVideoId) {
+        embedRef.current?.setVolume(clamped);
+        embedRef.current?.mute(clamped <= 0.001);
+        return;
+      }
+      const el = getActiveMedia();
+      if (el) {
+        el.volume = clamped;
+        el.muted = clamped <= 0.001;
+      }
+    },
+    [embedVideoId, getActiveMedia]
+  );
+
+  const setSleepTimer = useCallback(
+    (minutes: number | null) => {
+      if (sleepFadeRef.current) {
+        sleepFadeRef.current = false;
+        applyOutputVolume(preSleepVolumeRef.current);
+      }
+      if (!minutes || minutes <= 0) {
+        setSleepEndsAt(null);
+        setSleepRemaining(0);
+        return;
+      }
+      setSleepEndsAt(Date.now() + minutes * 60000);
+      setSleepRemaining(minutes * 60);
+    },
+    [applyOutputVolume]
+  );
+
+  useEffect(() => {
+    if (!sleepEndsAt) {
+      sleepTickRef.current = null;
+      return;
+    }
+    const tick = () => {
+      const left = Math.max(0, Math.round((sleepEndsAt - Date.now()) / 1000));
+      setSleepRemaining(left);
+
+      if (left <= 0) {
+        setSleepEndsAt(null);
+        setSleepRemaining(0);
+        if (sleepFadeRef.current) {
+          sleepFadeRef.current = false;
+          applyOutputVolume(preSleepVolumeRef.current);
+        }
+        pauseCurrent();
+        return;
+      }
+      if (left > 10) {
+        if (sleepFadeRef.current) {
+          sleepFadeRef.current = false;
+          applyOutputVolume(volumeRef.current);
+        }
+        return;
+      }
+      if (!sleepFadeRef.current) {
+        sleepFadeRef.current = true;
+        preSleepVolumeRef.current = mutedRef.current ? 0 : volumeRef.current;
+      }
+      applyOutputVolume(preSleepVolumeRef.current * (left / 10));
+    };
+    sleepTickRef.current = tick;
+    tick();
+    const id = window.setInterval(tick, 1000);
+    return () => {
+      sleepTickRef.current = null;
+      window.clearInterval(id);
+    };
+  }, [sleepEndsAt, applyOutputVolume, pauseCurrent]);
+
   const onEmbedReady = useCallback(() => {
     const yt = embedRef.current;
     if (!yt) return;
@@ -500,6 +603,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     if (dur && isFinite(dur)) setDuration(dur);
     const id = currentRef.current?.id;
     if (id && time > 3) lastTickRef.current = { id, seconds: time };
+    sleepTickRef.current?.();
   }, []);
 
   const onEmbedVideoChange = useCallback(
@@ -569,7 +673,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     const start = embedRef.current?.getCurrentTime() ?? 0;
     if (repeat === "one") {
       ytPoolRef.current = [current];
-      setYtRequest({ ids: [embedVideoId], index: 0, start, key: ++ytKeyRef.current });
+      setYtRequest({ ids: [embedVideoId], index: 0, start, key: ++ytKeyRef.current, autoPlay: true });
     } else {
       setYtRequest(buildYtRequest(current, start));
     }
@@ -673,6 +777,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       if (el.duration && isFinite(el.duration)) setDuration(el.duration);
       const id = currentRef.current?.id;
       if (id && el.currentTime > 3) lastTickRef.current = { id, seconds: el.currentTime };
+      sleepTickRef.current?.();
     };
     const onMeta = (event: Event) => {
       const el = event.currentTarget as HTMLMediaElement;
@@ -732,6 +837,41 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       save();
     };
   }, [current]);
+
+  /* Lưu phiên (bài đang nghe + hàng đợi) để iOS đóng tab vẫn mở lại đúng chỗ. */
+  useEffect(() => {
+    if (!current) return;
+    try {
+      window.localStorage.setItem(SESSION_KEY, JSON.stringify({ current, queue, index }));
+    } catch {
+      /* ignore */
+    }
+  }, [current, queue, index]);
+
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    if (typeof window === "undefined") return;
+    let data: { current?: Track; queue?: Track[]; index?: number } | null = null;
+    try {
+      data = JSON.parse(window.localStorage.getItem(SESSION_KEY) || "null");
+    } catch {
+      data = null;
+    }
+    if (!data?.current) return;
+    const track = data.current;
+    const list = Array.isArray(data.queue) && data.queue.length ? data.queue : [track];
+    const at =
+      typeof data.index === "number" && data.index >= 0 && data.index < list.length ? data.index : 0;
+    setCurrent(track);
+    setQueue(list);
+    setIndex(at);
+    /* Nạp sẵn nhưng không tự phát: iOS chặn autoplay, và người dùng có thể
+       không muốn nhạc bật lên khi vừa mở app. */
+    resolveCurrent(track, list, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   /* Khi quay lại tab: YouTube có thể đã tự chuyển bài trong lúc chạy nền.
      Đọc lại index thật từ player để UI khớp (JS có thể đã bị treo trước đó). */
@@ -928,6 +1068,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       position,
       duration,
       history,
+      sleepRemaining,
+      sleepActive: sleepEndsAt !== null,
+      setSleepTimer,
       playTrack,
       playQueue,
       playShuffled,
@@ -978,6 +1121,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       position,
       duration,
       history,
+      sleepRemaining,
+      sleepEndsAt,
+      setSleepTimer,
       playTrack,
       playQueue,
       playShuffled,
