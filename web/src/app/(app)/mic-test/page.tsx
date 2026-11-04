@@ -39,6 +39,9 @@ export default function MicTestPage() {
   const [recording, setRecording] = useState(false);
   const [clipUrl, setClipUrl] = useState<string | null>(null);
   const [clipSize, setClipSize] = useState(0);
+  const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [deviceId, setDeviceId] = useState("");
+  const [sessionType, setSessionType] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -181,20 +184,20 @@ export default function MicTestPage() {
     rafRef.current = requestAnimationFrame(loop);
   }, [draw]);
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (preferredId?: string) => {
     setError(null);
     try {
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error("Trình duyệt này không cung cấp micro cho web app.");
       }
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: false,
-          noiseSuppression: false,
-          autoGainControl: false,
-          channelCount: 1,
-        },
-      });
+      const audio: MediaTrackConstraints = {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+      };
+      if (preferredId) audio.deviceId = { exact: preferredId };
+      const stream = await navigator.mediaDevices.getUserMedia({ audio });
       streamRef.current = stream;
 
       const AudioCtor =
@@ -222,6 +225,17 @@ export default function MicTestPage() {
         baseLatency: typeof ctx.baseLatency === "number" ? ctx.baseLatency : null,
         outputLatency: typeof latencyCtx.outputLatency === "number" ? latencyCtx.outputLatency : null,
       });
+      setDeviceId(track?.getSettings?.().deviceId ?? preferredId ?? "");
+
+      const session = (navigator as Navigator & { audioSession?: { type?: string } }).audioSession;
+      setSessionType(session?.type ?? null);
+
+      try {
+        const list = await navigator.mediaDevices.enumerateDevices();
+        setDevices(list.filter((d) => d.kind === "audioinput"));
+      } catch {
+        /* ignore */
+      }
 
       setMicOn(true);
       lastUiRef.current = 0;
@@ -231,6 +245,28 @@ export default function MicTestPage() {
       setError(e instanceof Error ? e.message : "Không mở được micro.");
     }
   }, [cleanup, loop]);
+
+  const switchDevice = useCallback(
+    async (id: string) => {
+      cleanup();
+      await start(id || undefined);
+    },
+    [cleanup, start]
+  );
+
+  const changeSession = useCallback((type: string) => {
+    const session = (navigator as Navigator & { audioSession?: { type?: string } }).audioSession;
+    if (!session) {
+      setError("Trình duyệt không hỗ trợ Audio Session API.");
+      return;
+    }
+    try {
+      session.type = type;
+      setSessionType(session.type ?? type);
+    } catch {
+      setError("Không đổi được kiểu phiên âm thanh.");
+    }
+  }, []);
 
   const toggleRecord = useCallback(() => {
     const stream = streamRef.current;
@@ -268,6 +304,9 @@ export default function MicTestPage() {
   }, [recording]);
 
   const settings = info?.settings;
+  const bluetoothMic = /airpod|bluetooth|buds|beats|jbl|sony|wh-|wf-|bose|soundcore|edifier|galaxy/i.test(
+    info?.label ?? ""
+  );
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
@@ -295,7 +334,7 @@ export default function MicTestPage() {
         </div>
 
         <button
-          onClick={micOn ? cleanup : start}
+          onClick={micOn ? cleanup : () => void start()}
           className={cn("st-btn w-full justify-center", micOn ? "st-btn-ghost" : "st-btn-primary")}
         >
           {micOn ? "Tắt micro" : "Bật micro"}
@@ -303,6 +342,35 @@ export default function MicTestPage() {
 
         {error ? (
           <p className="rounded-xl bg-red-500/10 px-3 py-2 text-sm text-red-400">{error}</p>
+        ) : null}
+
+        {micOn || devices.length > 0 ? (
+          <label className="block text-xs text-slate-500">
+            Nguồn micro
+            <select
+              value={deviceId}
+              onChange={(e) => void switchDevice(e.target.value)}
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 dark:border-white/10 dark:bg-white/5 dark:text-slate-200"
+            >
+              <option value="">Mặc định của hệ thống</option>
+              {devices.map((d, i) => (
+                <option key={d.deviceId || i} value={d.deviceId}>
+                  {d.label || `Micro ${i + 1}`}
+                </option>
+              ))}
+            </select>
+            <span className="mt-1 block text-[11px] text-slate-400">
+              Chọn micro của điện thoại (không phải tai nghe) để tránh tai nghe chuyển sang chế độ gọi.
+              iOS có thể bỏ qua lựa chọn này.
+            </span>
+          </label>
+        ) : null}
+
+        {bluetoothMic ? (
+          <p className="rounded-xl bg-amber-500/10 px-3 py-2 text-xs text-amber-500">
+            Đang dùng micro của tai nghe Bluetooth → iOS chuyển sang chế độ gọi (HFP), nhạc sẽ bị đục.
+            Thử chọn micro điện thoại ở trên.
+          </p>
         ) : null}
 
         <div className="grid grid-cols-2 gap-2 text-xs">
@@ -328,6 +396,20 @@ export default function MicTestPage() {
                 : "—"
             }
           />
+          <Stat label="Phiên âm thanh" value={sessionType ?? "không hỗ trợ"} />
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-slate-500">Thử kiểu phiên:</span>
+          {["play-and-record", "playback", "auto"].map((t) => (
+            <button
+              key={t}
+              onClick={() => changeSession(t)}
+              className={cn("st-chip", sessionType === t && "!bg-brand-600/20 !text-brand-500")}
+            >
+              {t}
+            </button>
+          ))}
         </div>
       </section>
 
@@ -397,7 +479,7 @@ export default function MicTestPage() {
 
       <section className="st-card space-y-2 p-4 text-sm text-slate-500">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
-          Cách kiểm tra với tai nghe Bluetooth
+          Thử với tai nghe Bluetooth
         </h2>
         <ol className="list-decimal space-y-1 pl-5">
           <li>Bật một bài ở trang chủ, đeo tai nghe Bluetooth.</li>
@@ -405,6 +487,10 @@ export default function MicTestPage() {
           <li>
             Nghe xem nhạc có bị <strong>nhỏ và đục</strong> đi không — đó là lúc tai nghe chuyển
             sang chế độ gọi (HFP).
+          </li>
+          <li>
+            Mở “Nguồn micro”, chọn micro của điện thoại (thường tên kiểu “iPhone Microphone”).
+            Nếu nhạc trở lại bình thường và ô “Thiết bị” đổi tên → đã né được HFP.
           </li>
           <li>Hát thử và xem cao độ có bám đúng nốt không.</li>
         </ol>
