@@ -83,6 +83,17 @@ export default function SettingsPage() {
       </section>
 
       <section className="st-card p-4">
+        <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400">Karaoke</h2>
+        <p className="mb-3 text-sm text-slate-500">
+          Kiểm tra micro và cao độ trước khi dùng chế độ hát: xem máy có nhận giọng không, và tai nghe
+          Bluetooth có bị tụt sang chế độ gọi khi mở micro không.
+        </p>
+        <Link href="/mic-test" className="st-btn-ghost">
+          Mở kiểm tra micro
+        </Link>
+      </section>
+
+      <section className="st-card p-4">
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400">Cài như ứng dụng (PWA)</h2>
         <p className="text-sm text-slate-500">
           Trên iPhone: mở bằng Safari → nút Chia sẻ → “Thêm vào Màn hình chính”. Trên máy tính: bấm biểu tượng cài đặt
