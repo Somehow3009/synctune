@@ -85,8 +85,9 @@ export default function SettingsPage() {
       <section className="st-card p-4">
         <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400">Karaoke</h2>
         <p className="mb-3 text-sm text-slate-500">
-          Kiểm tra micro và cao độ trước khi dùng chế độ hát: xem máy có nhận giọng không, và tai nghe
-          Bluetooth có bị tụt sang chế độ gọi khi mở micro không.
+          Mở trình phát và bấm nút <strong>Hát</strong> để hát theo bài đang phát. Hết bài, app tự chấm
+          điểm và gợi ý cải thiện. Trang dưới đây để kiểm tra micro/cao độ và thử đổi nguồn micro nếu
+          tai nghe Bluetooth làm nhạc bị đục.
         </p>
         <Link href="/mic-test" className="st-btn-ghost">
           Mở kiểm tra micro

@@ -6,6 +6,7 @@ import { cn, formatTime } from "@/lib/utils";
 import {
   ChevronDown,
   Headphones,
+  Mic,
   Moon,
   Next,
   Pause,
@@ -19,6 +20,7 @@ import {
   Volume,
   VolumeX,
 } from "./Icons";
+import { KaraokePanel } from "./KaraokePanel";
 import { QueuePanel } from "./QueuePanel";
 import { YouTubePlayer } from "./YouTubePlayer";
 
@@ -71,6 +73,7 @@ export function FullPlayer() {
   const [queueOpen, setQueueOpen] = useState(false);
   const [speedOpen, setSpeedOpen] = useState(false);
   const [sleepOpen, setSleepOpen] = useState(false);
+  const [karaokeOpen, setKaraokeOpen] = useState(false);
 
   useEffect(() => {
     if (!expanded) setSpeedOpen(false);
@@ -226,6 +229,15 @@ export function FullPlayer() {
             {audioOnly ? "Chỉ nghe" : "Video"}
           </button>
 
+          <button
+            onClick={() => setKaraokeOpen(true)}
+            disabled={!current}
+            className="st-chip !bg-white/10 !text-white/80 disabled:opacity-40"
+            title="Hát karaoke và chấm điểm"
+          >
+            <Mic width={14} height={14} /> Hát
+          </button>
+
           <div className="relative">
             <button onClick={() => setSpeedOpen((s) => !s)} className="st-chip !bg-white/10 !text-white/80">
               {speed}x
@@ -308,6 +320,7 @@ export function FullPlayer() {
       </div>
 
       <QueuePanel open={queueOpen} onClose={() => setQueueOpen(false)} />
+      <KaraokePanel open={karaokeOpen} onClose={() => setKaraokeOpen(false)} />
     </div>
   );
 }
