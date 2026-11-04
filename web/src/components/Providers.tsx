@@ -45,7 +45,7 @@ function PersistentAudio() {
 }
 
 function MediaDiagnostics() {
-  const { audioRef } = usePlayer();
+  const { audioRef, embedRef, isEmbed, playing, current, ytRequest, sleepRemaining } = usePlayer();
   const [enabled, setEnabled] = useState(false);
   const [snapshot, setSnapshot] = useState("");
 
@@ -53,24 +53,31 @@ function MediaDiagnostics() {
     if (typeof window === "undefined") return;
     if (new URLSearchParams(window.location.search).get("diag") !== "1") return;
     setEnabled(true);
-    const tick = () => {
+    const id = window.setInterval(() => {
       const el = audioRef.current;
-      if (!el) {
-        setSnapshot("no <audio> element");
-        return;
+      let media: string;
+      if (isEmbed) {
+        const yt = embedRef.current;
+        const st = yt?.getState() ?? -1;
+        const t = yt?.getCurrentTime() ?? 0;
+        const idx = yt?.getIndex() ?? -1;
+        const loop = ytRequest?.ids.length === 1 ? "one" : "all";
+        media = `YT state=${st} t=${t.toFixed(1)} idx=${idx}/${ytRequest?.ids.length ?? 0} loop=${loop}`;
+      } else if (el) {
+        media =
+          `audio paused=${el.paused} rs=${el.readyState} ` +
+          `t=${el.currentTime.toFixed(1)}/${isFinite(el.duration) ? el.duration.toFixed(1) : "-"}`;
+      } else {
+        media = "no media";
       }
-      const ms =
-        "mediaSession" in navigator ? navigator.mediaSession.playbackState : "-";
+      const ms = "mediaSession" in navigator ? navigator.mediaSession.playbackState : "-";
       setSnapshot(
-        `paused=${el.paused} muted=${el.muted} vol=${el.volume.toFixed(2)} rs=${el.readyState} ns=${el.networkState} ` +
-          `t=${el.currentTime.toFixed(1)}/${isFinite(el.duration) ? el.duration.toFixed(1) : "-"} ` +
-          `vis=${document.visibilityState} ms=${ms} src=${(el.currentSrc || "none").slice(0, 60)}`
+        `vis=${document.visibilityState} playing=${playing} ms=${ms} sleep=${sleepRemaining}s | ` +
+          `${media} | ${(current?.title || "-").slice(0, 28)}`
       );
-    };
-    tick();
-    const id = window.setInterval(tick, 500);
+    }, 500);
     return () => window.clearInterval(id);
-  }, [audioRef]);
+  }, [audioRef, embedRef, isEmbed, playing, current, ytRequest, sleepRemaining]);
 
   if (!enabled) return null;
   return (

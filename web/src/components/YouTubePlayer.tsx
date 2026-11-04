@@ -149,6 +149,7 @@ export const YouTubePlayer = forwardRef<YouTubePlayerHandle, Props>(function You
   const pendingRef = useRef<LoadRequest | null>(null);
   const loopRef = useRef(loop);
   loopRef.current = loop;
+  const lastStateRef = useRef(-1);
 
   const cbRef = useRef({ onReady, onState, onProgress, onError, onVideoChange });
   cbRef.current = { onReady, onState, onProgress, onError, onVideoChange };
@@ -213,6 +214,7 @@ export const YouTubePlayer = forwardRef<YouTubePlayerHandle, Props>(function You
               cbRef.current.onReady?.();
             },
             onStateChange: (event: { data: number }) => {
+              lastStateRef.current = event.data;
               cbRef.current.onState?.(event.data);
               if (event.data === 1) {
                 try {
@@ -272,9 +274,20 @@ export const YouTubePlayer = forwardRef<YouTubePlayerHandle, Props>(function You
   useEffect(() => {
     const id = window.setInterval(() => {
       const player = playerRef.current;
-      if (!player || !readyRef.current || !cbRef.current.onProgress) return;
+      if (!player || !readyRef.current) return;
       try {
-        cbRef.current.onProgress(player.getCurrentTime() || 0, player.getDuration() || 0);
+        /* Khi tab bị throttle, event onStateChange có thể bị mất.
+           Hỏi trực tiếp player để UI và trạng thái phát không bị lệch. */
+        const state = player.getPlayerState();
+        if (state !== lastStateRef.current) {
+          lastStateRef.current = state;
+          cbRef.current.onState?.(state);
+          if (state === 1) {
+            const data = player.getVideoData?.();
+            if (data?.video_id) cbRef.current.onVideoChange?.(data.video_id);
+          }
+        }
+        cbRef.current.onProgress?.(player.getCurrentTime() || 0, player.getDuration() || 0);
       } catch {
         /* not ready */
       }

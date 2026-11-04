@@ -114,6 +114,8 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const mutedRef = useRef(false);
   const sleepFadeRef = useRef(false);
   const preSleepVolumeRef = useRef(1);
+  /** Người dùng có ý định phát hay không (dùng để tự phục hồi sau khi bị ngắt). */
+  const wantsPlayRef = useRef(false);
   /* Tick hẹn giờ, được gọi thêm từ sự kiện tiến trình phát để vẫn chạy khi
      màn hình khoá (iOS bóp nghẹt setInterval nhưng media vẫn cập nhật). */
   const sleepTickRef = useRef<(() => void) | null>(null);
@@ -215,7 +217,6 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     (track: Track, list?: Track[] | null, autoPlay = true) => {
       const reqId = ++requestRef.current;
 
-      stopMedia();
       setError(null);
       setResolved(null);
       setPosition(0);
@@ -223,6 +224,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
       const videoId = youtubeVideoId(track.url);
       if (videoId) {
+        /* Chuyển sang YouTube thì phải dừng audio cũ, nếu không hai nguồn
+           sẽ phát chồng lên nhau. */
+        stopMedia();
         const saved = loadNumber(posKey(track.id), 0);
         const start = saved > 5 ? saved : 0;
         setEmbedVideoId(videoId);
@@ -243,10 +247,15 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       setEmbedVideoId(null);
       setEmbedStart(0);
       setLoading(true);
+      /* Không dừng audio cũ ở đây: giữ phiên âm thanh liên tục để iOS không
+         treo trang trong lúc chờ resolve (đặc biệt khi khoá màn hình). */
       resolveStream(track.url)
         .then((data) => {
           if (requestRef.current !== reqId) return;
           if (!data.audio && !data.video) {
+            stopMedia();
+            wantsPlayRef.current = false;
+            setPlaying(false);
             setError("Không tìm thấy luồng phát cho nội dung này");
             setLoading(false);
             return;
@@ -256,6 +265,9 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
         })
         .catch((e: Error) => {
           if (requestRef.current !== reqId) return;
+          stopMedia();
+          wantsPlayRef.current = false;
+          setPlaying(false);
           setError(e.message);
           setLoading(false);
         });
@@ -266,6 +278,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   const beginQueue = useCallback(
     (track: Track, list: Track[] | null, at: number | null, source: QueueSource | null) => {
       pendingPlayRef.current = true;
+      wantsPlayRef.current = true;
       if (list) setQueue(list);
       if (at != null) setIndex(at);
       setQueueSource(source);
@@ -343,6 +356,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   );
 
   const restart = useCallback(() => {
+    wantsPlayRef.current = true;
     if (embedVideoId) {
       embedRef.current?.seek(0);
       embedRef.current?.play();
@@ -356,6 +370,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   }, [embedVideoId, getActiveMedia]);
 
   const pauseCurrent = useCallback(() => {
+    wantsPlayRef.current = false;
     if (embedVideoId) {
       embedRef.current?.pause();
       return;
@@ -425,17 +440,21 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
       const state = yt.getState();
       if (state === 1 || state === 3) yt.pause();
       else yt.play();
+      wantsPlayRef.current = !(state === 1 || state === 3);
       return;
     }
     const el = getActiveMedia();
     if (!el) return;
     if (el.paused) {
       pendingPlayRef.current = true;
+      wantsPlayRef.current = true;
       void el.play().catch((e) => {
         pendingPlayRef.current = false;
+        wantsPlayRef.current = false;
         setError(e.message);
       });
     } else {
+      wantsPlayRef.current = false;
       el.pause();
     }
   }, [current, embedVideoId, getActiveMedia]);
@@ -594,8 +613,10 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
   /* YouTube tự chuyển bài trong playlist nội bộ. Chỉ cần đồng bộ lại UI,
      vì khi chạy nền chính player của YouTube mới là thứ giữ nhạc liên tục. */
   const onEmbedState = useCallback((state: number) => {
-    if (state === 1) setPlaying(true);
-    else if (state === 0 || state === 2) setPlaying(false);
+    if (state === 1) {
+      wantsPlayRef.current = true;
+      setPlaying(true);
+    } else if (state === 0 || state === 2) setPlaying(false);
   }, []);
 
   const onEmbedProgress = useCallback((time: number, dur: number) => {
@@ -905,6 +926,26 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     return () => document.removeEventListener("visibilitychange", onVisible);
   }, [syncFromEmbed]);
 
+  /* Tự phục hồi sau khi bị ngắt (cuộc gọi, Siri, tai nghe rút) với nguồn audio
+     trực tiếp. Không áp dụng cho YouTube vì khoá màn hình có thể do chính
+     người dùng bấm tạm dừng trên Control Center. */
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    const resume = () => {
+      if (document.visibilityState !== "visible") return;
+      if (embedVideoId || !wantsPlayRef.current) return;
+      const el = getActiveMedia();
+      if (!el || !el.paused || !el.currentSrc) return;
+      void el.play().catch(() => undefined);
+    };
+    document.addEventListener("visibilitychange", resume);
+    window.addEventListener("pageshow", resume);
+    return () => {
+      document.removeEventListener("visibilitychange", resume);
+      window.removeEventListener("pageshow", resume);
+    };
+  }, [embedVideoId, getActiveMedia]);
+
   /* Media Session (lock screen / control center)
      Đăng ký handler một lần, đọc giá trị mới nhất qua ref để không bị
      tháo/gắn lại mỗi lần timeupdate. */
@@ -917,6 +958,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
 
     const play = () => {
       const h = msHandlersRef.current;
+      wantsPlayRef.current = true;
       if (h.embedVideoId) {
         embedRef.current?.play();
         return;
@@ -926,6 +968,7 @@ export function PlayerProvider({ children }: { children: React.ReactNode }) {
     };
     const pause = () => {
       const h = msHandlersRef.current;
+      wantsPlayRef.current = false;
       if (h.embedVideoId) {
         embedRef.current?.pause();
         return;
